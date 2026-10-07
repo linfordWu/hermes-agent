@@ -1,4 +1,7 @@
-"""Tests for the memory provider interface, manager, and builtin provider."""
+"""Tests for the memory provider interface, manager, and builtin provider.
+
+Regression coverage for timed-out provider prefetch threads leaking across managers (#134392).
+"""
 
 import json
 import threading
@@ -8,7 +11,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from agent.memory_provider import MemoryProvider
-from agent.memory_manager import MemoryManager, inject_memory_provider_tools
+from agent.memory_manager import (
+    MemoryManager,
+    _EXTERNAL_PREFETCH_LOCK,
+    _EXTERNAL_PREFETCH_THREADS,
+    inject_memory_provider_tools,
+)
 
 # ---------------------------------------------------------------------------
 # Concrete test provider
@@ -343,18 +351,67 @@ class TestMemoryManager:
         external.release.set()
 
         deadline = time.monotonic() + 1.0
-        while (
-            external.name in mgr._external_prefetch_threads
-            and mgr._external_prefetch_threads[external.name].is_alive()
-            and time.monotonic() < deadline
-        ):
+        while any(key[1] == external.name for key in _EXTERNAL_PREFETCH_THREADS) and time.monotonic() < deadline:
             time.sleep(0.01)
 
         result = mgr.prefetch_all("query 3")
 
         assert result == "builtin memory\n\nlate external memory"
         assert external.prefetch_queries == ["query", "query 3"]
-        assert external.name not in mgr._external_prefetch_threads
+        assert not any(key[1] == external.name for key in _EXTERNAL_PREFETCH_THREADS)
+
+    def test_external_prefetch_timeout_is_shared_across_managers(self):
+        external = BlockingPrefetchProvider("shared-slow")
+        external._prefetch_result = "late external memory"
+
+        first = MemoryManager(external_prefetch_timeout=0.01)
+        first.add_provider(external)
+        assert first._prefetch_provider(external, "query 1") == ""
+        assert external.started.wait(timeout=1.0)
+
+        for index in range(2, 6):
+            manager = MemoryManager(external_prefetch_timeout=0.01)
+            manager.add_provider(external)
+            assert manager._prefetch_provider(external, f"query {index}") == ""
+
+        assert external.prefetch_queries == ["query 1"]
+        with _EXTERNAL_PREFETCH_LOCK:
+            active = [
+                thread for key, thread in _EXTERNAL_PREFETCH_THREADS.items()
+                if key[1] == external.name and thread.is_alive()
+            ]
+        assert len(active) == 1
+
+        external.release.set()
+        active[0].join(timeout=1.0)
+        assert not active[0].is_alive()
+        assert not any(key[1] == external.name for key in _EXTERNAL_PREFETCH_THREADS)
+
+    def test_external_prefetch_threads_are_isolated_by_profile(self, tmp_path):
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        external = BlockingPrefetchProvider("profile-slow")
+        manager = MemoryManager(external_prefetch_timeout=0.01)
+        manager.add_provider(external)
+        try:
+            for profile in (tmp_path / "profile-a", tmp_path / "profile-b"):
+                token = set_hermes_home_override(profile)
+                try:
+                    assert manager._prefetch_provider(external, str(profile)) == ""
+                finally:
+                    reset_hermes_home_override(token)
+
+            assert external.prefetch_queries == [str(tmp_path / "profile-a"), str(tmp_path / "profile-b")]
+            with _EXTERNAL_PREFETCH_LOCK:
+                active = [
+                    thread for key, thread in _EXTERNAL_PREFETCH_THREADS.items()
+                    if key[1] == external.name and thread.is_alive()
+                ]
+            assert len(active) == 2
+        finally:
+            external.release.set()
+            for thread in active if "active" in locals() else []:
+                thread.join(timeout=1.0)
 
 
 class TestPluginMemoryDiscovery:

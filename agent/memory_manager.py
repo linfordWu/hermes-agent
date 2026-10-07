@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider, PRE_COMPRESS_CHECKPOINT_API_VERSION, ctx_bound, spawn_context_thread
 from agent.skill_commands import extract_user_instruction_from_skill_message
+from hermes_constants import hermes_home_key
 from tools.hook_output_spill import get_spill_config, spill_if_oversized
 from tools.registry import tool_error
 
@@ -30,6 +31,8 @@ _LEGACY_PRE_COMPRESS_API_VERSION = 1
 # blocks interpreter exit.
 _SYNC_DRAIN_TIMEOUT_S = 5.0
 _EXTERNAL_PREFETCH_TIMEOUT_S = 8.0
+_EXTERNAL_PREFETCH_THREADS: Dict[tuple[str, str], threading.Thread] = {}
+_EXTERNAL_PREFETCH_LOCK = threading.Lock()
 
 
 # -- Signature introspection (providers are duck-typed; call shapes vary) -----
@@ -350,8 +353,6 @@ class MemoryManager:
         if timeout <= 0:
             raise ValueError("external_prefetch_timeout must be positive")
         self._external_prefetch_timeout = timeout
-        self._external_prefetch_threads: Dict[str, threading.Thread] = {}
-        self._external_prefetch_lock = threading.Lock()
         # Single-worker background executor for end-of-turn sync/prefetch, created lazily so
         # the builtin-only path spawns no threads; one worker serializes a provider's writes.
         self._sync_executor: Optional[ThreadPoolExecutor] = None
@@ -456,25 +457,32 @@ class MemoryManager:
 
     def _prefetch_provider(self, provider: MemoryProvider, query: str, *, session_id: str = "") -> str:
         """Run one provider's prefetch; external providers are bounded by a timeout. A stuck external
-        call keeps running on its daemon thread and the provider is skipped on later turns until it returns."""
+        call keeps running on its daemon thread and is skipped by every manager in the same profile
+        until it returns."""
         if provider.name == "builtin":
             return provider.prefetch(query, session_id=session_id)
 
+        registry_key = (hermes_home_key(), provider.name)
         result_box: Dict[str, Any] = {}
+        thread: threading.Thread
 
         def _run() -> None:
             try:
                 result_box["value"] = provider.prefetch(query, session_id=session_id) or ""
             except Exception as exc:  # pragma: no cover - re-raised by caller
                 result_box["error"] = exc
+            finally:
+                with _EXTERNAL_PREFETCH_LOCK:
+                    if _EXTERNAL_PREFETCH_THREADS.get(registry_key) is thread:
+                        _EXTERNAL_PREFETCH_THREADS.pop(registry_key, None)
 
         thread = spawn_context_thread(_run, name=f"memory-prefetch-{provider.name}")
-        with self._external_prefetch_lock:
-            existing = self._external_prefetch_threads.get(provider.name)
+        with _EXTERNAL_PREFETCH_LOCK:
+            existing = _EXTERNAL_PREFETCH_THREADS.get(registry_key)
             if existing is not None and existing.is_alive():
                 logger.debug("Memory provider '%s' prefetch is still running; skipping this turn", provider.name)
                 return ""
-            self._external_prefetch_threads[provider.name] = thread
+            _EXTERNAL_PREFETCH_THREADS[registry_key] = thread
             thread.start()
 
         thread.join(self._external_prefetch_timeout)
@@ -485,9 +493,6 @@ class MemoryManager:
             )
             return ""
 
-        with self._external_prefetch_lock:
-            if self._external_prefetch_threads.get(provider.name) is thread:
-                self._external_prefetch_threads.pop(provider.name, None)
         if "error" in result_box:
             raise result_box["error"]
         result = result_box.get("value", "")
