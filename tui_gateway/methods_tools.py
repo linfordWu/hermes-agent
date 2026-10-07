@@ -1973,7 +1973,7 @@ def _(rid, params: dict) -> dict:
     return _run_action(rid, params, _PLUGINS_ACTIONS, "plugins")
 
 
-@method("shell.exec")
+@_scoped_rpc("shell.exec", 5003)
 def _(rid, params: dict) -> dict:
     cmd = params.get("command", "")
     if not cmd:
