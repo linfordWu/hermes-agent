@@ -20,6 +20,7 @@ DEFAULT_WINDOW_SECONDS = 60
 # Documented fast-mode rate-limit headers; a limit of 0 means the organization has no fast
 # capacity for the model (https://platform.claude.com/docs/en/build-with-claude/fast-mode).
 _FAST_LIMIT_HEADERS = ("anthropic-fast-input-tokens-limit", "anthropic-fast-output-tokens-limit")
+_FAST_MODE_CREDITS_REQUIRED = "usage credits are required for fast mode"
 #: Tiers sent on every request of the session (OpenAI ``service_tier`` values; ``priority`` also
 #: selects Anthropic/xAI fast mode). Ultrafast is OpenAI-only and gated per model.
 STATIC_TIERS = frozenset({"priority", "ultrafast"})
@@ -90,16 +91,25 @@ def effective_request_overrides(agent: Any) -> dict[str, Any]:
 
 
 def fast_mode_unprovisioned(api_error: Any, api_kwargs: Any) -> bool:
-    """True for a 429 on a ``speed: "fast"`` request whose fast-mode limit header is 0. The
-    organization has no fast capacity for the model, so waiting or rotating keys cannot help."""
+    """True for a 429 on a ``speed: "fast"`` request when the organization lacks fast capacity.
+
+    Anthropic signals this with a zero fast-mode limit header or, for subscriptions without extra
+    usage, a body saying that usage credits are required for fast mode.
+    """
     if getattr(api_error, "status_code", None) != 429 or not isinstance(api_kwargs, dict):
         return False
     if (api_kwargs.get("extra_body") or {}).get("speed") != "fast":
         return False
-    headers = getattr(getattr(api_error, "response", None), "headers", None)
-    if headers is None:
-        return False
-    return any(str(headers.get(name, "")).strip() == "0" for name in _FAST_LIMIT_HEADERS)
+    headers = getattr(getattr(api_error, "response", None), "headers", None) or {}
+    if any(str(headers.get(name, "")).strip() == "0" for name in _FAST_LIMIT_HEADERS):
+        return True
+    # Claude subscription accounts with extra usage disabled report this entitlement failure in
+    # the 429 body instead of returning the documented fast-limit headers.
+    body = getattr(api_error, "body", None)
+    error_body = body.get("error") if isinstance(body, dict) else None
+    detail = error_body.get("message", "") if isinstance(error_body, dict) else ""
+    detail = f"{getattr(api_error, 'message', '')} {detail} {body or ''}".lower()
+    return _FAST_MODE_CREDITS_REQUIRED in detail
 
 
 def mark_fast_mode_unavailable(agent: Any) -> bool:

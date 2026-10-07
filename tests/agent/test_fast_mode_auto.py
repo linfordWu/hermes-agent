@@ -167,6 +167,27 @@ def test_unprovisioned_detects_only_zero_limit_fast_429s():
     assert fast_mode.fast_mode_unprovisioned(RuntimeError("boom"), _FAST_KWARGS) is False
 
 
+def test_unprovisioned_detects_fast_mode_credit_entitlement_without_limit_headers():
+    error = SimpleNamespace(
+        status_code=429,
+        body={"type": "error", "error": {"type": "rate_limit_error", "message": "Usage credits are required for fast mode."}},
+        message="Usage credits are required for fast mode.",
+        response=SimpleNamespace(headers={}),
+    )
+    assert fast_mode.fast_mode_unprovisioned(error, _FAST_KWARGS) is True
+    from agent.turn_recovery import recover_before_classification
+
+    agent = SimpleNamespace(
+        model="claude-opus-5-5", provider="anthropic", log_prefix="", _fast_mode_unavailable_models=set(),
+        _vprint=lambda *a, **k: None,
+    )
+    retry, _ = recover_before_classification(
+        agent, error, messages=[], api_messages=[], api_kwargs=_FAST_KWARGS, active_system_prompt="sys",
+    )
+    assert retry is True
+    assert agent._fast_mode_unavailable_models == {"claude-opus-5-5"}
+
+
 def test_unavailable_model_drops_speed_for_the_session_and_only_that_model():
     agent = _agent(
         service_tier="priority", model="claude-opus-5", provider="anthropic",
