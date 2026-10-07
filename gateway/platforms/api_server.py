@@ -287,47 +287,17 @@ _REQUEST_OPTION_MISSING = object()
 # Full internal ladder + "none" (what /reasoning and config.yaml accept); provider
 # vocabulary clamping happens downstream in agent.reasoning_effort.
 _REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"})
-_RUNTIME_AGENT_OVERRIDE_KEYS = (
-    "api_key", "base_url", "provider", "api_mode", "command", "args", "credential_pool")
-
-
 def _clean_request_string(value: Any) -> Optional[str]:
     """Return a stripped request string, or None for absent/non-string values."""
     return (value.strip() or None) if isinstance(value, str) else None
 
 
-# model_options decoding lives in the topical sibling (line-cap offset);
+# Request option decoding and provider runtime resolution live in topical siblings;
 # re-exported here so importers are unaffected.
 from gateway.platforms.api_server_request_options import (  # noqa: E402
     _request_reasoning_config, _request_service_tier)
-
-
-def _apply_runtime_agent_overrides(
-    runtime_kwargs: Dict[str, Any], overrides: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Merge resolved provider/runtime fields into ``runtime_kwargs`` in place."""
-    if not isinstance(overrides, dict):
-        return runtime_kwargs
-    for key in _RUNTIME_AGENT_OVERRIDE_KEYS:
-        value = overrides.get(key)
-        if value is None:
-            continue
-        runtime_kwargs[key] = list(value) if key == "args" and isinstance(value, (list, tuple)) else value
-    return runtime_kwargs
-
-
-def _resolve_request_runtime_agent_kwargs(provider: str, target_model: Optional[str] = None) -> Dict[str, Any]:
-    """gateway.run._resolve_runtime_agent_kwargs() for an explicit provider/model, so an API
-    caller uses the same authenticated provider catalog without mutating config.yaml."""
-    from hermes_cli.runtime_provider import resolve_runtime_provider, format_runtime_provider_error, _get_model_config
-    try:
-        runtime = resolve_runtime_provider(requested=provider, target_model=target_model)
-    except Exception as exc:
-        raise RuntimeError(format_runtime_provider_error(exc)) from exc
-
-    return {
-        **{k: runtime.get(k) for k in ("api_key", "base_url", "provider", "api_mode", "command")},
-        "args": list(runtime.get("args") or []),
-        "credential_pool": runtime.get("credential_pool")}
+from gateway.platforms.api_server_request_overrides import (  # noqa: E402
+    _apply_runtime_agent_overrides, _resolve_request_runtime_agent_kwargs)
 
 
 def _request_agent_overrides(
