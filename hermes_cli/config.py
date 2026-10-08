@@ -38,6 +38,7 @@ from hermes_cli.colors import Colors, color
 from hermes_cli import managed_scope
 from hermes_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul
 from hermes_cli.secret_prompt import masked_secret_prompt
+from hermes_cli.provider_env import inject_profile_env_vars
 # Managed-mode, container and HERMES_UID/GID policy live in hermes_constants (import-safe);
 # re-exported here so existing callers/patch targets keep working.
 from hermes_constants import (  # noqa: F401
@@ -4009,33 +4010,7 @@ def config_command(args):
     sys.exit(1)
 
 
-# ---- OPTIONAL_ENV_VARS injection from provider profiles and platform plugins (once, at import) ----
-
-def _inject_profile_env_vars() -> None:
-    """Expose env_vars of every ``auth_type="api_key"`` provider in providers/ via OPTIONAL_ENV_VARS
-    without editing this file."""
-    try:
-        from providers import list_providers
-        for _pp in list_providers():
-            if _pp.auth_type != "api_key":
-                continue
-            for _var in _pp.env_vars:
-                if _var in OPTIONAL_ENV_VARS:
-                    continue
-                _is_key = not _var.endswith(("_BASE_URL", "_URL"))
-                _label = _pp.display_name or _pp.name
-                OPTIONAL_ENV_VARS[_var] = {
-                    "description": f"{_label} {'API key' if _is_key else 'base URL override'}",
-                    "prompt": f"{_label} {'API key' if _is_key else 'base URL (leave empty for default)'}",
-                    "url": _pp.signup_url or None,
-                    "password": _is_key,
-                    "category": "provider",
-                    "advanced": True}
-    except Exception:
-        pass
-
-
-_inject_profile_env_vars()
+inject_profile_env_vars(OPTIONAL_ENV_VARS)
 
 
 PlatformManifestSource = Literal["all", "bundled", "user"]
