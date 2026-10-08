@@ -1,9 +1,10 @@
-"""Disabling reasoning must actually stop Gemini thinking (#91927).
+"""Disabled reasoning uses each Gemini family’s supported request vocabulary.
 
 ``includeThoughts: False`` only hides thought parts; the model still reasons
 internally and bills thought tokens against maxOutputTokens, starving small
-budgets (title generation's 64 tokens). ``thinkingBudget: 0`` is the real
-off switch on families that document it.
+budgets (title generation's 64 tokens). Gemini 2.5 uses ``thinkingBudget: 0``;
+Gemini 3 uses its lowest supported ``thinkingLevel`` instead of deprecated
+numeric budgets.
 """
 
 import pytest
@@ -15,23 +16,22 @@ from agent.transports.chat_completions import (
 
 
 @pytest.mark.parametrize(
-    "model,expect_budget_zero",
+    "model,expected_config",
     [
-        ("gemini-2.5-flash", True),
-        ("gemini-3.6-flash", True),
-        ("gemini-3.1-pro", True),
-        ("gemini-flash-latest", True),
-        ("gemini-1.5-flash", False),  # pre-2.5: thinkingBudget undocumented
+        ("gemini-2.5-flash", {"thinkingBudget": 0}),
+        ("gemini-3.6-flash", {"thinkingLevel": "minimal"}),
+        ("gemini-3.1-flash-lite", {"thinkingLevel": "minimal"}),
+        ("gemini-3.8-flash", {"thinkingLevel": "low"}),
+        ("gemini-3.7-flash", {"thinkingLevel": "low"}),
+        ("gemini-3.1-pro", {"thinkingLevel": "low"}),
+        ("gemini-flash-latest", {"thinkingLevel": "low"}),
+        ("gemini-1.5-flash", {}),  # pre-2.5: neither field is documented
     ],
 )
-def test_disabled_reasoning_zeroes_thinking_budget_where_supported(model, expect_budget_zero):
+def test_disabled_reasoning_uses_family_supported_config(model, expected_config):
     for reasoning in ({"enabled": False}, {"effort": "none"}):
         config = _build_gemini_thinking_config(model, reasoning)
-        assert config is not None
-        assert config.get("includeThoughts") is False
-        assert (config.get("thinkingBudget") == 0) is expect_budget_zero
-        if not expect_budget_zero:
-            assert "thinkingBudget" not in config
+        assert config == {"includeThoughts": False, **expected_config}
 
 
 def test_enabled_reasoning_never_zeroes_budget_and_non_gemini_gets_nothing():
@@ -51,3 +51,5 @@ def test_snake_case_translation_carries_thinking_budget():
     assert translated == {"include_thoughts": False, "thinking_budget": 0}
     translated = _snake_case_gemini_thinking_config({"includeThoughts": False})
     assert translated == {"include_thoughts": False}
+    translated = _snake_case_gemini_thinking_config({"includeThoughts": False, "thinkingLevel": "low"})
+    assert translated == {"include_thoughts": False, "thinking_level": "low"}
