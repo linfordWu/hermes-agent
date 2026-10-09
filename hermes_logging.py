@@ -21,8 +21,10 @@ from time import monotonic as _monotonic
 from typing import Optional, Sequence
 
 from hermes_constants import (
-    get_config_path, get_hermes_home, mkdir_under_hermes_home, named_profile_is_deleted,
+    get_config_path, get_default_hermes_root, get_hermes_home, mkdir_under_hermes_home,
+    named_profile_is_deleted,
 )
+from hermes_logging_sidecars import cap_uncapped_sidecar_logs
 
 # setup_logging() is idempotent: a second call is a no-op unless ``force=True``.
 _logging_initialized = False
@@ -342,6 +344,8 @@ def setup_logging(
     global _fallback_warned
     home = hermes_home or get_hermes_home()
     log_dir = mkdir_under_hermes_home(home / "logs")
+    root_log_dir = get_default_hermes_root(home=home) / "logs"
+    sidecar_warnings = cap_uncapped_sidecar_logs((log_dir, root_log_dir))
 
     # Stdout is block-buffered when piped (no TTY); line-buffer it so a
     # headless supervisor's log stream tracks the agent loop incrementally
@@ -355,6 +359,8 @@ def setup_logging(
     # profile's records (the handlers carry no home filter), and a duplicate writer on top of
     # an existing router.
     if _adopt_secondary_home(home):
+        for warning in sidecar_warnings:
+            logging.getLogger("hermes_logging").warning("%s", warning)
         return log_dir
     cfg_level, cfg_max_size, cfg_backup = _read_logging_config()
     level_name = (log_level or cfg_level or "INFO").upper()
@@ -382,6 +388,9 @@ def setup_logging(
             formatter=RedactingFormatter(_LOG_FORMAT),
             log_filter=_ComponentFilter(COMPONENT_PREFIXES[component]) if component else None,
         )
+
+    for warning in sidecar_warnings:
+        logging.getLogger("hermes_logging").warning("%s", warning)
 
     if _WINDOWS_CLH_FALLBACK and not _fallback_warned:
         # One-shot, and the file handlers above are already live, so this lands
