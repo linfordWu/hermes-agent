@@ -415,6 +415,56 @@ class TestGitWorktreeFilesNeverCleaned:
         assert dg.guess_category(nested) is None
 
 
+class TestHermesHomeScriptsAreNeverCleaned:
+    """Regression for #107343/#135412: scripts/ is durable user tooling on plain installs."""
+
+    def test_flat_script_survives_session_cleanup_and_stale_tracking(self, _isolate_env):
+        """A lone scripts/test_*.py is protected even without Git or project markers.
+
+        Exercise the real post_tool_call -> on_session_end path, then seed the old tracked.json
+        classification to prove quick() revalidates and drops the stale entry. A root-level test
+        scratch file remains disposable as the control.
+        """
+        dg = _load_lib()
+        pi = _load_plugin_init()
+        scripts = _isolate_env / "scripts"
+        scripts.mkdir()
+        durable = scripts / "test_user_script.py"
+        _run_tool(
+            pi,
+            "write_file",
+            {"path": str(durable), "content": "print('durable')\n"},
+            create=lambda: durable.write_text("print('durable')\n"),
+            session_id="s_scripts",
+        )
+
+        assert dg.guess_category(durable) is None
+
+        scratch = _isolate_env / "test_session_scratch.py"
+        _run_tool(
+            pi,
+            "write_file",
+            {"path": str(scratch), "content": "print('scratch')\n"},
+            create=lambda: scratch.write_text("print('scratch')\n"),
+            session_id="s_scripts",
+        )
+        old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        dg.save_tracked([
+            {"path": str(durable), "category": "test", "timestamp": old, "size": 1},
+            {"path": str(scratch), "category": "test", "timestamp": old, "size": 1},
+        ])
+
+        pi._on_session_end(session_id="s_scripts", completed=True, interrupted=False)
+
+        assert durable.exists(), "user-authored scripts/test_*.py must never be auto-deleted"
+        assert not scratch.exists(), "root-level ephemeral tests remain eligible for cleanup"
+        assert dg.load_tracked() == [], "stale script entry must be dropped, not retried"
+
+        durable.unlink()
+        dg._sweep_empty_dirs(_isolate_env)
+        assert scripts.is_dir(), "the user-authored scripts root must survive when empty"
+
+
 class TestStaleCronEntryMigration:
     """Regression tests for #37721 — stale cron-output entries in tracked.json."""
 
