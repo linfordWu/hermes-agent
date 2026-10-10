@@ -297,10 +297,9 @@ delegate_task(
 - 如果子智能体在重启前已经完成、但结果尚未交付，该完成事件会被恢复，并重新经过所属会话的正常路由检查。
 - 被取消的子智能体会返回结构化结果（`status="interrupted"`，`exit_reason="interrupted"`），但由于父智能体也被中断，该结果通常不会出现在用户可见的回复中。
 
-对于必须在会话关闭或进程重启后继续的**持久执行**，请使用：
+对于必须在会话关闭或进程重启后继续的**持久执行**，请使用 `cronjob`（action=`create`）调度独立的智能体运行。
 
-- `cronjob`（action=`create`）——调度独立的智能体运行；不受父智能体轮次中断影响。
-- `terminal(background=True, notify_on_complete=True)`——长时间运行的 shell 命令，在智能体执行其他操作时持续运行。
+`terminal(background=True, notify_on_complete=True)` 只保证命令可在启动它的当前轮次结束后继续运行。设置 `persist_on_release=True` 后，进程还可跨越会话关闭/重置、上下文压缩和错误恢复；但网关正常关闭时仍会终止所有受管理的终端进程。崩溃后，检查点可能会重新接管仍存活的 PID，但它会成为无法读取输出的分离会话（只能查看状态或停止进程，不能恢复实时日志）。这不是可跨重启恢复的持久任务队列；必须跨网关重启继续的工作应使用 `cronjob`。
 :::
 
 ## 关键特性
