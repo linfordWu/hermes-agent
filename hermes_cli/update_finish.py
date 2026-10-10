@@ -8,7 +8,7 @@ import sys
 
 def finish_update(*, root, assume_yes, gateway_mode, pre_update_snapshot_id,
                   had_desktop_app_before_update, pre_update_version,
-                  plan, windows_resume, followups=None) -> None:
+                  plan, windows_resume, followups=None, no_gateway_restart=False) -> None:
     """Finish the selected checkout; never fetch, switch branches or restore a stash.
 
     Same contract as the current completion (C3): the code is committed, so a failed build,
@@ -55,6 +55,11 @@ def finish_update(*, root, assume_yes, gateway_mode, pre_update_snapshot_id,
     # committed, so the watcher sees success; owed work is on the receipt.
     if gateway_mode:
         _write_gateway_update_exit_code(True)
+    if no_gateway_restart:
+        update_receipt.record_skip("gateway_restart", "--no-gateway-restart: deferred, marker kept")
+        update_receipt.record_stage("restart", "skipped")
+        print("→ Gateway restart deferred (--no-gateway-restart); restart gateways separately.")
+        return
     run = update_receipt._current.get()
     update_id = run.data.get("update_id") if run is not None else None
     try:
@@ -156,6 +161,7 @@ def main(context: Path, result: Path) -> int:
                     had_desktop_app_before_update=desktop,
                     pre_update_version=request.get("pre_update_version"),
                     plan=plan, windows_resume=token, followups=owed,
+                    no_gateway_restart=request.get("no_gateway_restart", False),
                 )
         code = 0
     except SystemExit as exc:
