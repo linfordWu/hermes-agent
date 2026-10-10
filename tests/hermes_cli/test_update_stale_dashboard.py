@@ -8,6 +8,7 @@ against a freshly-updated JS bundle, producing 401s / empty data.
 History:
 - #16872 introduced the warn-only helper (``_warn_stale_dashboard_processes``).
 - #17049 fixed a Windows wmic UnicodeDecodeError crash on non-UTF-8 locales.
+- #136159 preserves macOS argv containing Python ``-c`` code so updater respawns remain valid.
 - This file now also covers the kill semantics that replaced the warning.
 """
 
@@ -773,7 +774,7 @@ class TestFilterDashboardRespawnCandidates:
 
 
 class TestCmdlineCapture:
-    """_dashboard_cmdline_for_pid reads /proc on Linux, ps on macOS."""
+    """_dashboard_cmdline_for_pid reads exact process argv where the host exposes it."""
 
     def _live(self):
         return main_dashboard
@@ -817,6 +818,31 @@ class TestCmdlineCapture:
             argv = main_dashboard._dashboard_cmdline_for_pid(888)
 
         assert argv == ["hermes", "serve", "--port", "8300"]
+
+    @pytest.mark.platforms("macos")
+    def test_preserves_inline_python_argv_from_live_process(self):
+        """macOS `ps` flattens argv; process inspection must preserve a Python `-c` code argument."""
+        import subprocess
+        import time
+
+        code = "import time; time.sleep(30)"
+        process = subprocess.Popen(
+            [sys.executable, "-I", "-c", code, "serve", "--port", "8300"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            argv = None
+            while time.monotonic() < deadline and argv is None:
+                argv = main_dashboard._dashboard_cmdline_for_pid(process.pid)
+                if argv is None:
+                    time.sleep(0.05)
+            assert argv is not None
+            assert argv[1:4] == ["-I", "-c", code]
+            assert argv[4:] == ["serve", "--port", "8300"]
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
 
     @pytest.mark.platforms("windows")
     def test_returns_none_on_windows(self):

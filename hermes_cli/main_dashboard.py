@@ -351,8 +351,9 @@ def _restart_launchd_job(domain: str, label: str, old_pid: int | None, *, timeou
 
 
 def _dashboard_cmdline_for_pid(pid: int) -> list[str] | None:
-    """Exact argv of a running process: ``/proc/<pid>/cmdline`` (Linux), ``ps -o command=`` + shlex
-    (macOS), None on Windows (no graceful taskkill window; Desktop manages its backend)."""
+    """Exact argv of a running process: ``/proc/<pid>/cmdline`` (Linux), psutil on macOS, or a
+    conservative ``ps`` fallback. None on Windows (no graceful taskkill window; Desktop manages its
+    backend)."""
     if sys.platform == "win32":
         return None
     try:
@@ -362,6 +363,17 @@ def _dashboard_cmdline_for_pid(pid: int) -> list[str] | None:
                 raw = f.read()
             argv = [part.decode("utf-8", errors="replace") for part in raw.split(b"\x00") if part]
             return argv or None
+        try:
+            import psutil
+        except ImportError:
+            psutil = None
+        if psutil is not None:
+            try:
+                argv = psutil.Process(pid).cmdline()
+            except psutil.Error:
+                argv = []
+            if argv:
+                return argv
         result = _run_probe(["ps", "-p", str(pid), "-o", "command="], timeout=10)
         if result.returncode != 0:
             return None
@@ -372,6 +384,10 @@ def _dashboard_cmdline_for_pid(pid: int) -> list[str] | None:
             argv = shlex.split(command)
         except ValueError:
             argv = command.split()
+        # `ps -o command=` flattens the original argv; shlex cannot recover the single source
+        # argument following Python's `-c`. Never respawn an argv that would execute only a fragment.
+        if "-c" in argv:
+            return None
         return argv or None
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
