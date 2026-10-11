@@ -245,6 +245,9 @@ def _agent_home(agent: Any) -> Optional[Path]:
             return Path(override)
     except Exception:
         pass
+    captured_home = getattr(agent, "_hermes_home_at_init", None)
+    if captured_home:
+        return Path(captured_home)
     try:
         db_path = getattr(getattr(agent, "_session_db", None), "db_path", None)
         return Path(db_path).parent if db_path else None

@@ -278,6 +278,11 @@ class AIAgent(
         tool_result_metadata_callback: Optional[Callable[..., dict]] = None,
     ):
         """Forwarder — see ``agent.agent_init.init_agent`` (same keyword parameters, minus ``tool_delay``)."""
+        # Profile-scoped workers may build prompts on a thread that did not inherit the
+        # ContextVar. Keep the profile home that was active when this agent was created;
+        # a shared/foreign session DB path is not a reliable identity source.
+        from hermes_constants import get_hermes_home_override
+        self._hermes_home_at_init = get_hermes_home_override()
         init_kwargs = {k: v for k, v in locals().items() if k not in ("self", "tool_delay")}
         if tool_delay is not None:
             warnings.warn("tool_delay is deprecated and ignored; sequential tool calls "

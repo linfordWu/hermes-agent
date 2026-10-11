@@ -98,6 +98,51 @@ def test_db_home_wins_on_bare_thread_without_override(tmp_path, monkeypatch):
     assert result["home"] == bot_home
 
 
+def test_captured_profile_home_beats_foreign_db_on_bare_thread(tmp_path, monkeypatch):
+    """The DB can be shared or foreign; a home captured at agent construction survives a thread hop."""
+    from agent import system_prompt
+
+    default_home = tmp_path / "root"
+    bot_home = default_home / "profiles" / "mybot"
+    bot_home.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(default_home))
+
+    # The agent was constructed under the default profile, but later receives a shared DB
+    # handle whose path happens to live under a bot's home.
+    agent = _agent_for(bot_home, _hermes_home_at_init=str(default_home))
+    result = {}
+
+    def resolve():
+        result["home"] = system_prompt._agent_home(agent)
+
+    t = threading.Thread(target=resolve)
+    t.start()
+    t.join()
+
+    assert result["home"] == default_home
+
+
+def test_captured_profile_home_survives_bare_thread_without_db(tmp_path, monkeypatch):
+    """Agents without a SessionDB still keep their captured profile home across thread hops."""
+    from agent import system_prompt
+
+    default_home = tmp_path / "root"
+    bot_home = default_home / "profiles" / "mybot"
+    bot_home.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(default_home))
+    agent = _agent_for(bot_home, _session_db=None, _hermes_home_at_init=str(bot_home))
+    result = {}
+
+    def resolve():
+        result["home"] = system_prompt._agent_home(agent)
+
+    t = threading.Thread(target=resolve)
+    t.start()
+    t.join()
+
+    assert result["home"] == bot_home
+
+
 def test_full_prompt_scoped_to_bot_on_bare_thread(tmp_path, monkeypatch):
     """Wiring test: SOUL.md identity, skills block, and profile line must ALL
     come from the bot's home when building on an unbound thread with the
