@@ -297,10 +297,10 @@ _OAUTH_ADD_SPECS: dict[str, _OAuthAddSpec] = {
 
 
 def _ask(prompt: str, reader: Callable[[str], str] | None = None) -> str | None:
-    """Stripped answer from *reader* (default ``input``); None when the user hits EOF / Ctrl-C."""
+    """Stripped answer from *reader* (default ``input``); None when input is interrupted or unavailable."""
     try:
         return (reader or input)(prompt).strip()
-    except (EOFError, KeyboardInterrupt):
+    except (EOFError, KeyboardInterrupt, OSError):
         return None
 
 
@@ -359,14 +359,15 @@ def _unsuppress_provider_sources(provider: str) -> None:
 
 
 def _add_api_key_credential(args, provider: str, pool) -> PooledCredential:
-    token = ((getattr(args, "api_key", None) or "").strip()
-             or masked_secret_prompt("Paste your API key: ").strip())
+    token = (getattr(args, "api_key", None) or "").strip()
+    if not token:
+        token = _ask("Paste your API key: ", masked_secret_prompt) or ""
     if not token:
         raise SystemExit("No API key provided.")
     default_label = f"api-key-{len(pool.entries()) + 1}"
     label = (getattr(args, "label", None) or "").strip()
     if not label and sys.stdin.isatty():
-        label = line_input(f"Label (optional, default: {default_label}): ").strip()
+        label = _ask(f"Label (optional, default: {default_label}): ", line_input) or ""
     label = label or default_label
     entry = PooledCredential(
         provider=provider, id=uuid.uuid4().hex[:6], label=label, auth_type=AUTH_TYPE_API_KEY,

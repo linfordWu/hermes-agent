@@ -115,6 +115,77 @@ def test_auth_add_api_key_persists_manual_entry(tmp_path, monkeypatch):
     assert entry["access_token"] == "sk-or-manual"
 
 
+def test_auth_add_api_key_eof_takes_no_key_abort(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    _write_auth_store(tmp_path, {"version": 1, "providers": {}})
+
+    from hermes_cli import auth_commands
+
+    class _Args:
+        provider = "openrouter"
+        auth_type = "api-key"
+        api_key = None
+        label = None
+
+    def _eof(_prompt):
+        raise EOFError
+
+    monkeypatch.setattr(auth_commands, "masked_secret_prompt", _eof)
+
+    with pytest.raises(SystemExit, match="No API key provided\\."):
+        auth_commands.auth_add_command(_Args())
+
+
+def test_auth_add_api_key_terminal_read_error_takes_no_key_abort(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    _write_auth_store(tmp_path, {"version": 1, "providers": {}})
+
+    from hermes_cli import auth_commands
+
+    class _Args:
+        provider = "openrouter"
+        auth_type = "api-key"
+        api_key = None
+        label = None
+
+    def _terminal_error(_prompt):
+        raise OSError(19, "Operation not supported by device")
+
+    monkeypatch.setattr(auth_commands, "masked_secret_prompt", _terminal_error)
+
+    with pytest.raises(SystemExit, match="No API key provided\\."):
+        auth_commands.auth_add_command(_Args())
+
+
+def test_auth_add_label_eof_uses_default_label(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    _write_auth_store(tmp_path, {"version": 1, "providers": {}})
+
+    from hermes_cli import auth_commands
+
+    class _Args:
+        provider = "openrouter"
+        auth_type = "api-key"
+        api_key = "sk-or-manual"
+        label = None
+
+    def _eof(_prompt):
+        raise EOFError
+
+    monkeypatch.setattr(auth_commands, "masked_secret_prompt", lambda _prompt: "sk-or-manual")
+    monkeypatch.setattr(auth_commands, "line_input", _eof)
+    monkeypatch.setattr(
+        auth_commands,
+        "sys",
+        type("_Sys", (), {"stdin": type("_Stdin", (), {"isatty": lambda self: True})()})(),
+    )
+
+    auth_commands.auth_add_command(_Args())
+
+    payload = json.loads((tmp_path / "hermes" / "auth.json").read_text())
+    assert payload["credential_pool"]["openrouter"][0]["label"] == "api-key-1"
+
+
 def test_auth_add_migrates_legacy_prefixed_key_for_configured_provider(
     tmp_path, monkeypatch
 ):
