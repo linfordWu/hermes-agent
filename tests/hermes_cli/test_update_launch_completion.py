@@ -305,6 +305,25 @@ def test_relaunch_keeps_invocation_and_checkout_imports(tmp_path, mode):
     assert json.loads(result.stdout) == ["from checkout", argv[1:]]
 
 
+def test_relaunch_script_keeps_sibling_imports(tmp_path):
+    root = tmp_path / "hermes-checkout"
+    root.mkdir()
+    script_dir = tmp_path / "plugin"
+    script_dir.mkdir()
+    (script_dir / "sibling.py").write_text("value = 'from sibling'\n")
+    script = script_dir / "entry.py"
+    script.write_text("import json, sibling; print(json.dumps(sibling.value))\n")
+    argv = [str(script)]
+    command = venv_sync.relaunch_command(
+        Path(sys.executable), root, argv, [sys.executable, *argv], None
+    )
+
+    result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == "from sibling"
+
+
 @pytest.mark.parametrize("owner,argv", [(None, []), ("external", []), ("electron-updater", []), ("self", ["-p", "coder", "pm", "repair"])])
 def test_non_self_or_pm_launch_cannot_trigger_update(tmp_path, monkeypatch, owner, argv):
     import pm
