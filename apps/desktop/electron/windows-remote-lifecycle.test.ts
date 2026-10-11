@@ -315,29 +315,54 @@ test('Windows probe validates Hermes and Python topology before selection', asyn
     'C:\\\\h\\\\hermes.exe'
   )
 
-  const explicitCheck = script.indexOf('if($explicit){Assert-NoReparse $explicit $false;')
-  const explicitPythonCheck = script.indexOf('Assert-NoReparse $explicitPython $false')
+  const explicitCheck = script.indexOf('if($explicit){Assert-NoReparse $explicit $false}')
   const envHome = script.indexOf('$hermesHome=$env:HERMES_HOME')
   // #118988: HERMES_HOME is trusted only when it is a directory on the remote; anything else
   // (stale User-scope value, client path leaked over SSH) falls back to the remote default.
   const envHomeGuard = script.indexOf('Test-Path -LiteralPath $hermesHome -PathType Container')
   const fallbackJoin = script.indexOf('Join-Path $hermesHome')
-  const candidatePythonCheck = script.indexOf('Assert-NoReparse $candidatePython $true')
   const candidateSelection = script.indexOf('Get-Item -LiteralPath $candidate')
-  const pythonJoin = script.indexOf('$python=[IO.Path]::Combine')
+  const cmdFallback = script.indexOf('Get-Command hermes.cmd -ErrorAction SilentlyContinue')
+  const runtimeQuery = script.indexOf('$runtimeOutput=@(& $hermes "--print-runtime-command"')
+  const pythonResolve = script.indexOf('$python=[string]$runtimeCommand[0]')
   const pythonCheck = script.indexOf('Assert-NoReparse $python $false')
   const output = script.indexOf('[ordered]@{')
 
   assert.ok(explicitCheck >= 0)
-  assert.ok(explicitCheck < explicitPythonCheck)
-  assert.ok(explicitPythonCheck < envHome)
+  assert.ok(explicitCheck < envHome)
   assert.ok(envHome < envHomeGuard)
   assert.ok(envHomeGuard < fallbackJoin)
-  assert.ok(candidatePythonCheck >= 0)
-  assert.ok(candidatePythonCheck < candidateSelection)
-  assert.ok(pythonJoin >= 0)
-  assert.ok(pythonJoin < pythonCheck)
+  assert.ok(cmdFallback >= 0)
+  assert.ok(cmdFallback < candidateSelection)
+  assert.ok(runtimeQuery >= 0)
+  assert.ok(runtimeQuery < pythonResolve)
+  assert.ok(pythonResolve < pythonCheck)
   assert.ok(pythonCheck < output)
+  assert.doesNotMatch(script, /GetDirectoryName\(\$hermes\).*python\.exe/)
+})
+
+test("Windows probe accepts hermes.cmd and resolves Python from the launcher's runtime command", async () => {
+  let script = ''
+
+  const result = await probeWindowsRemote(
+    sshWith(async (command, options) => {
+      script = scriptFromInvocation(command, options)
+
+      return JSON.stringify({
+        os: 'Windows',
+        arch: 'AMD64',
+        hermesHome: 'C:\\Users\\alice\\AppData\\Local\\hermes',
+        hermesPath: 'C:\\Users\\alice\\AppData\\Local\\hermes\\bin\\hermes.cmd',
+        python: 'C:\\Users\\alice\\AppData\\Local\\hermes\\installs\\current\\venv\\Scripts\\python.exe'
+      })
+    })
+  )
+
+  assert.match(script, /Get-Command hermes\.cmd -ErrorAction SilentlyContinue/)
+  assert.match(script, /--print-runtime-command/)
+  assert.match(script, /\$python=\[string\]\$runtimeCommand\[0\]/)
+  assert.equal(result.hermesPath, 'C:\\Users\\alice\\AppData\\Local\\hermes\\bin\\hermes.cmd')
+  assert.equal(result.python, 'C:\\Users\\alice\\AppData\\Local\\hermes\\installs\\current\\venv\\Scripts\\python.exe')
 })
 
 const CLEAN_PROBE_RESULT = JSON.stringify({
