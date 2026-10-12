@@ -2159,32 +2159,6 @@ def _resolve_moa_context_length(model: str, custom_providers: list | None) -> Op
     return None
 
 
-def _config_override_context_length(model: str, base_url: str, provider: str, custom_providers: list | None) -> Optional[int]:
-    """Steps 0b-0c: config-only overrides (never touch the network). 0b: EXPLICIT model_overrides
-    only — fill-gap _default entries apply inside lookup_models_dev_context once the catalog has
-    missed, so a _default can never preempt custom_providers or live probes. 0c: custom_providers."""
-    # This is the supported self-unblock path for models with wrong context in models.dev (#84482) and for
-    # custom/local models (#8731).
-    if provider and model:
-        with contextlib.suppress(Exception):  # fall through to other resolution paths
-            from agent.models_dev import _override_context_window
-            mo_ctx = _override_context_window(provider, model)
-            if mo_ctx is not None and mo_ctx > 0:
-                return mo_ctx
-    # 0c. custom_providers per-model override — check before any probe. This closes the gap where /model
-    # switch and display paths used to fall back to 128K despite the user having a per-model context_length
-    # set. See #15779.
-    # Not gated on custom_providers: callers that never load the route list pass None and the
-    # helper self-resolves it from config (#69807).
-    if base_url and model:
-        with contextlib.suppress(Exception):  # fall through to probing
-            from hermes_cli.config import get_custom_provider_context_length
-            cp_ctx = get_custom_provider_context_length(model=model, base_url=base_url, custom_providers=custom_providers)
-            if cp_ctx:
-                return cp_ctx
-    return None
-
-
 def _resolve_provider_aware_context_length(model: str, base_url: str, api_key: str, provider: str, effective_provider: str) -> Optional[int]:
     """Step 5: provider-specific sources, tried in order; None when all miss."""
     # 5a. Copilot live /models — account-specific models (claude-opus-4.6-1m) absent from
@@ -2259,6 +2233,7 @@ def get_model_context_length(
         ctx = _resolve_moa_context_length(model, custom_providers)
         if ctx is not None:
             return ctx
+    from agent.model_metadata_overrides import _config_override_context_length
     ctx = _config_override_context_length(model, base_url, provider, custom_providers)
     if ctx is not None:
         return ctx
