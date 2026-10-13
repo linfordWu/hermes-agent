@@ -950,7 +950,15 @@ def _cmd_edit(args: argparse.Namespace) -> int:
     summary = getattr(args, "summary", None)
     title = getattr(args, "title", None)
     body = getattr(args, "body", None)
+    body_file = getattr(args, "body_file", None)
     priority = getattr(args, "priority", None)
+    if body is not None and body_file is not None:
+        return _err("kanban edit: --body and --body-file are mutually exclusive", 2)
+    if body_file is not None:
+        try:
+            body = sys.stdin.read() if body_file == "-" else Path(body_file).read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError) as exc:
+            return _err(f"kanban edit: --body-file: {exc}", 2)
     if result is None and (summary is not None or raw_metadata is not None):
         return _err("kanban edit: --summary and --metadata require --result", 2)
     if all(value is None for value in (title, body, priority, result)):

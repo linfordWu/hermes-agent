@@ -308,6 +308,9 @@ _SPECS = [
         _TASK_ID,
         _arg("--title", help="Replace the task title"),
         _arg("--body", help="Replace the task body"),
+        _arg("--body-file", metavar="PATH",
+             help="Read the replacement body from a file ('-' = stdin). "
+                  "Mutually exclusive with --body."),
         _arg("--priority", type=int, help="Replace the task priority"),
         _arg("--result", help="Backfilled task result text for a done task"),
         *_STEP_HANDOFF,
