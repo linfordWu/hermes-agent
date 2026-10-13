@@ -1,4 +1,4 @@
-"""Tests for native OpenAI Responses server-side compaction (gpt-5.6 only).
+"""Tests for native OpenAI Responses server-side compaction.
 
 Live behavior verified 2026-08-08 against api.openai.com: gpt-5.6 and
 gpt-5.3-codex accept ``context_management`` and emit compaction items;
@@ -28,10 +28,12 @@ def _agent(
     threshold: object = DEFAULT_COMPACT_THRESHOLD,
     compressor=None,
     capabilities=None,
+    provider=None,
 ):
     return SimpleNamespace(
         model=model,
         base_url=base_url,
+        provider=provider,
         codex_responses_native_compaction=enabled,
         compression_enabled=compression_enabled,
         codex_responses_compact_threshold=threshold,
@@ -52,6 +54,20 @@ class TestModelGate:
         for model in ("gpt-5.1", "gpt-5.2", "gpt-5.3-codex", "gpt-4o", "o3", ""):
             assert not is_native_compaction_model(model)
         assert not is_native_compaction_model(None)
+
+    def test_verified_codex_subscription_models_are_route_scoped(self):
+        official = "https://chatgpt.com/backend-api/codex"
+        for model in ("gpt-6.1-sol", "gpt-6-luna"):
+            assert is_native_compaction_model(
+                model, provider="openai-codex", base_url=official,
+            )
+            assert not is_native_compaction_model(
+                model, provider="openai", base_url="https://api.openai.com/v1",
+            )
+            assert not is_native_compaction_model(
+                model, provider="openai-codex", base_url="https://relay.example/v1",
+            )
+            assert not is_native_compaction_model(model)
 
 
 class TestRouteGate:
@@ -91,6 +107,17 @@ class TestRequestGate:
             is_codex_backend=True,
         )
         assert payload is not None
+
+    @pytest.mark.parametrize("model", ["gpt-6.1-sol", "gpt-6-luna"])
+    def test_verified_codex_subscription_model_gets_payload(self, model):
+        agent = _agent(
+            model=model,
+            base_url="https://chatgpt.com/backend-api/codex",
+            provider="openai-codex",
+        )
+        assert native_compaction_context_management(agent, is_codex_backend=True) == [
+            {"type": "compaction", "compact_threshold": DEFAULT_COMPACT_THRESHOLD}
+        ]
 
     def test_trusted_proxy_capability_gets_payload(self):
         payload = native_compaction_context_management(
