@@ -65,8 +65,9 @@ def _fire_approval_hook(hook_name: str, **kwargs) -> None:
     try:
         kwargs.setdefault("turn_id", _approval_turn_id.get())
         kwargs.setdefault("tool_call_id", _approval_tool_call_id.get())
-        if _approval_session_id.get():
-            kwargs.setdefault("session_id", _approval_session_id.get())
+        session_id = _approval_session_id.get() or _session_env("HERMES_SESSION_ID")
+        if session_id:
+            kwargs.setdefault("session_id", session_id)
         invoke_hook(hook_name, **kwargs)
     except Exception as exc:
         # invoke_hook() swallows per-callback errors; this is the dispatch layer itself failing.

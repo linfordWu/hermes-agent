@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 from tools import approval as approval_mod
 from tools import approval_context
+from gateway import session_context
 
 
 def _capture_hook(captured):
@@ -91,3 +92,42 @@ class TestApprovalHookSessionId:
             "no synthetic session id when none is bound — the observer's "
             "own fallback owns that decision"
         )
+
+    def test_session_id_forwarded_from_gateway_session_scope(self):
+        captured = []
+        tokens = session_context.set_session_vars(session_id="gateway-session")
+        try:
+            with patch(
+                "hermes_cli.lifecycle.invoke_hook",
+                side_effect=_capture_hook(captured),
+            ):
+                approval_context._fire_approval_hook(
+                    "pre_approval_request",
+                    session_key="route-key",
+                    command="rm -rf /tmp/example",
+                )
+        finally:
+            session_context.clear_session_vars(tokens)
+
+        _, kwargs = captured[0]
+        assert kwargs["session_id"] == "gateway-session"
+        assert kwargs["session_key"] == "route-key"
+
+    def test_explicit_session_id_preferred_over_gateway_session_scope(self):
+        captured = []
+        tokens = session_context.set_session_vars(session_id="gateway-session")
+        try:
+            with patch(
+                "hermes_cli.lifecycle.invoke_hook",
+                side_effect=_capture_hook(captured),
+            ):
+                approval_context._fire_approval_hook(
+                    "post_approval_response",
+                    session_id="explicit-session",
+                    choice="approved",
+                )
+        finally:
+            session_context.clear_session_vars(tokens)
+
+        _, kwargs = captured[0]
+        assert kwargs["session_id"] == "explicit-session"

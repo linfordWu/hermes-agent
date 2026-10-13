@@ -12,6 +12,7 @@ import pytest
 
 import tools.approval as approval_module
 from tools import approval_context
+from gateway import session_context
 from tools import approval_smart
 from tools.approval import check_all_command_guards, check_execute_code_guard, clear_session
 from tools.approval_context import set_current_session_key
@@ -62,6 +63,7 @@ class TestCliPathFiresHooks:
         monkeypatch.setattr(approval_context, "_get_approval_mode", lambda: "manual")
 
         captured = []
+        session_tokens = session_context.set_session_vars(session_id="hermes-session-id")
 
         def fake_invoke_hook(hook_name, **kwargs):
             captured.append((hook_name, kwargs))
@@ -71,10 +73,13 @@ class TestCliPathFiresHooks:
         def cb(command, description, *, allow_permanent=True):
             return "once"
 
-        with patch("hermes_cli.plugins.invoke_hook", side_effect=fake_invoke_hook):
-            result = check_all_command_guards(
-                "rm -rf /tmp/test-hook", "local", approval_callback=cb,
-            )
+        try:
+            with patch("hermes_cli.plugins.invoke_hook", side_effect=fake_invoke_hook):
+                result = check_all_command_guards(
+                    "rm -rf /tmp/test-hook", "local", approval_callback=cb,
+                )
+        finally:
+            session_context.clear_session_vars(session_tokens)
 
         assert result["approved"] is True
 
@@ -86,6 +91,7 @@ class TestCliPathFiresHooks:
         assert pre_kwargs["command"] == "rm -rf /tmp/test-hook"
         assert pre_kwargs["surface"] == "cli"
         assert pre_kwargs["session_key"] == isolated_session
+        assert pre_kwargs["session_id"] == "hermes-session-id"
         assert isinstance(pre_kwargs["pattern_keys"], list)
         assert pre_kwargs["pattern_key"]  # non-empty primary pattern
         assert pre_kwargs["description"]
@@ -94,6 +100,7 @@ class TestCliPathFiresHooks:
         assert post_kwargs["choice"] == "once"
         assert post_kwargs["surface"] == "cli"
         assert post_kwargs["command"] == "rm -rf /tmp/test-hook"
+        assert post_kwargs["session_id"] == "hermes-session-id"
 
     def test_deny_reported_to_post_hook(self, isolated_session, monkeypatch):
         monkeypatch.setenv("HERMES_INTERACTIVE", "1")
