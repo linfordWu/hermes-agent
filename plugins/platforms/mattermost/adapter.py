@@ -198,7 +198,8 @@ class MattermostAdapter(BasePlatformAdapter):
         if file_ids is not None:
             base["file_ids"] = file_ids
         payload = _with_mentions_disabled(base)
-        if self._reply_mode == "thread":
+        is_dm = isinstance(metadata, dict) and metadata.get("mattermost_is_dm") is True
+        if self._reply_mode == "thread" and not is_dm:
             # root_id from reply_to, else metadata["thread_id"]/["root_id"], resolved to the true thread root.
             candidate = reply_to or (
                 isinstance(metadata, dict) and (metadata.get("thread_id") or metadata.get("root_id")))
@@ -566,7 +567,7 @@ class MattermostAdapter(BasePlatformAdapter):
             if message_text is None:
                 return
         # Thread support: replies use root_id; in thread mode a top-level channel post is itself a valid root.
-        thread_id = post.get("root_id") or None
+        thread_id = None if is_dm else post.get("root_id") or None
         if not thread_id and self._reply_mode == "thread" and not is_dm and post_id:
             thread_id = post_id
         if message_text[:1].isspace() and message_text.lstrip().startswith("/"):
