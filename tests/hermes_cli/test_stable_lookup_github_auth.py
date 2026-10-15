@@ -101,3 +101,33 @@ def test_a_rejected_token_then_anonymous_limit_names_the_anonymous_quota(github,
     assert [auth for _, auth in seen] == ["Bearer ghp_revoked", None]
     assert "anonymous requests are limited" in str(caught.value)
     assert "for your GITHUB_TOKEN" not in str(caught.value)
+
+
+def test_gh_cli_token_ignores_wrapper_stdout_before_the_token(monkeypatch):
+    monkeypatch.setattr(github_api, "_gh_cli_cache", None)
+    monkeypatch.setattr(github_api, "_gh_cli_probed", False)
+
+    class Result:
+        returncode = 0
+        stdout = "mise selected gh 2.102.0\ngho_user-token\n"
+
+    monkeypatch.setattr(github_api.subprocess, "run", lambda *args, **kwargs: Result())
+    assert github_api._gh_cli_token() == "gho_user-token"
+
+
+def test_invalid_gh_header_retries_anonymously_without_leaking_token(monkeypatch):
+    from hermes_cli import source_check
+
+    token = "wrapper-noise\nsecret-gho-token"
+    attempts = []
+
+    def request_with(url, accept, auth_token):
+        attempts.append(auth_token)
+        if auth_token is not None:
+            raise ValueError(f"Invalid header value b'Bearer {auth_token}'")
+        return "{}"
+
+    monkeypatch.setattr(github_api, "github_token", lambda: token)
+    monkeypatch.setattr(source_check, "_request_with", request_with)
+    assert source_check._request("https://api.github.com/test") == "{}"
+    assert attempts == [token, None]

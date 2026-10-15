@@ -126,6 +126,13 @@ def _request(url: str, accept: str = "application/vnd.github+json") -> str:
             exc.hermes_authenticated = token is not None  # which quota a 403/429 spent
             raise
         logger.debug("GitHub rejected the configured token; retrying anonymously")
+    except ValueError as exc:
+        # urllib/http.client rejects header values containing control characters
+        # before a request is sent. Treat an unusable token like a rejected one;
+        # the exception can include the token itself, so never surface it.
+        if token is None or "invalid header value" not in str(exc).lower():
+            raise
+        logger.debug("GitHub token could not be used in a request; retrying anonymously")
     try:
         return _request_with(url, accept, None)
     except urllib.error.HTTPError as exc:

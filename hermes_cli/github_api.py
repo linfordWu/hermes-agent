@@ -54,7 +54,12 @@ def _gh_cli_token() -> Optional[str]:
     except (OSError, subprocess.SubprocessError) as exc:
         logger.debug("gh CLI token lookup unavailable: %s", exc)
         return None
-    token = result.stdout.strip() if result.returncode == 0 else ""
+    # PATH wrappers (mise/asdf/direnv, etc.) may print setup diagnostics before
+    # exec'ing gh. `gh auth token` emits its credential as the final non-empty
+    # line; passing the wrapper's banner through would produce an invalid
+    # Authorization header and make update checks fail before reaching GitHub.
+    token = next((line.strip() for line in reversed(result.stdout.splitlines()) if line.strip()), "") \
+        if result.returncode == 0 else ""
     _gh_cli_cache = token or None
     return _gh_cli_cache
 
