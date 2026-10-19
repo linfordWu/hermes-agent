@@ -29,6 +29,7 @@ from tools.file_state import _evict_oldest
 from tools.file_tools_paths import _authoritative_workspace_root, _resolve_path_for_task
 
 logger = logging.getLogger("tools.file_tools")
+_WINDOWS = os.name == "nt"
 
 _read_tracker_lock = threading.Lock()
 _read_tracker: dict = {}
@@ -257,7 +258,8 @@ def _file_metadata(resolved: str) -> tuple | None:
 def _file_version(resolved: str) -> tuple | None:
     """A byte snapshot, not just mtime (editors/copy tools can preserve that)."""
     try:
-        if not stat.S_ISREG(os.stat(resolved).st_mode):
+        path_before = os.stat(resolved)
+        if not stat.S_ISREG(path_before.st_mode):
             return None
         fd = os.open(resolved, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
         with os.fdopen(fd, "rb") as stream:
@@ -267,7 +269,11 @@ def _file_version(resolved: str) -> tuple | None:
             digest = hashlib.file_digest(stream, "sha256").digest()
             after = os.stat(resolved)
         fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-        version = tuple(getattr(before, name) for name in fields)
+        # On Windows, fstat(handle).st_ctime_ns is creation time while stat(path)
+        # reports last-change time. Compare path metadata with path metadata there;
+        # otherwise every freshly read file appears stale to write_file.
+        version_source = path_before if _WINDOWS else before
+        version = tuple(getattr(version_source, name) for name in fields)
         if version == tuple(getattr(after, name) for name in fields):
             return (*version, digest)
         return None

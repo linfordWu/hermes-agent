@@ -14,11 +14,12 @@ import os
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 from tools import file_state
 from tools.file_tools import read_file_tool, write_file_tool, patch_tool
-from tools.file_tools_read_tracking import _read_tracker, reset_file_dedup
+from tools.file_tools_read_tracking import _file_version, _read_tracker, reset_file_dedup
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +97,24 @@ class TestStalenessCheck(unittest.TestCase):
             os.rmdir(self._tmpdir)
         except OSError:
             pass
+
+    def test_windows_file_version_uses_consistent_path_ctime(self):
+        """Windows fstat and stat expose different ctime semantics for one file."""
+        real_fstat = os.fstat
+
+        def windows_like_fstat(fd):
+            result = real_fstat(fd)
+            values = {
+                name: getattr(result, name)
+                for name in ("st_mode", "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+            }
+            values["st_ctime_ns"] += 1
+            return SimpleNamespace(**values)
+
+        with patch("tools.file_tools_read_tracking._WINDOWS", True), patch(
+            "tools.file_tools_read_tracking.os.fstat", windows_like_fstat
+        ):
+            self.assertIsNotNone(_file_version(self._tmpfile))
 
     @patch("tools.file_tools._get_file_ops")
     def test_no_warning_when_file_unchanged(self, mock_ops):
