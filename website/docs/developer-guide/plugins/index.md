@@ -1760,18 +1760,20 @@ def register(ctx):
         "mystatus",
         handler=_handle_status,
         description="Show plugin status",
+        output_mode="transcript",
     )
 ```
 
 After registration, users can type `/mystatus` in any session. The command appears in autocomplete, `/help` output, and the Telegram bot menu.
 
-**Signature:** `ctx.register_command(name: str, handler: Callable, description: str = "", args_hint: str = "")`
+**Signature:** `ctx.register_command(name: str, handler: Callable, description: str = "", args_hint: str = "", argument_mode: str | None = None, output_mode: str = "notice")`
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `name` | `str` | Command name without the leading slash (e.g. `"lcm"`, `"mystatus"`) |
 | `handler` | `Callable[[str], str \| None]` | Called with the raw argument string, plus any calling-session keywords it declares (see below). May also be `async`. |
 | `description` | `str` | Shown in `/help`, autocomplete, and Telegram bot menu |
+| `output_mode` | `str` | `"notice"` preserves the length-based pager; `"transcript"` keeps long output in the conversation transcript |
 
 **Key differences from `register_cli_command()`:**
 

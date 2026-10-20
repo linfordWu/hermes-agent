@@ -9,6 +9,7 @@ import contextlib
 import sys
 from pathlib import Path
 
+from .methods_plugin_commands import get_plugin_command_entry as _plugin_command_entry, slash_exec_plugin_response as _slash_exec_plugin_response
 from .method_ctx import HandlerRegistry, bind_module
 
 _registry = HandlerRegistry()
@@ -1061,12 +1062,8 @@ def _(rid, params: dict) -> dict:
         # run it. Anything else might be the skill the scan failed to see.
         if (dispatched.get("result") or {}).get("type") or not _is_registry_command(base):
             return dispatched
-    if plugin_handler := _plugin_command_handler(base) if base else None:
-        try:
-            return _ok(rid, {"output": _run_plugin_command(plugin_handler, arg, session, params.get("session_id", ""))
-                             or "(no output)"})
-        except Exception as e:
-            return _ok(rid, {"output": f"Plugin command error: {e}"})
+    if plugin_entry := _plugin_command_entry(base) if base else None:
+        return _slash_exec_plugin_response(rid, plugin_entry, arg, session, _ok, _run_plugin_command)
     worker = session.get("slash_worker")
     if not worker:
         # slash.exec runs on the RPC pool: two concurrent commands could both see slash_worker=None
