@@ -23,6 +23,31 @@ def _make_cli():
 
 
 class TestCliResumeCommand:
+    def test_recent_sessions_shows_human_sessions_across_sources(self, tmp_path):
+        """The in-chat picker should include gateway sessions but hide internal rows."""
+        from hermes_state import SessionDB
+
+        db = SessionDB(db_path=tmp_path / "state.db")
+        try:
+            for session_id, source in (
+                ("cli_session", "cli"),
+                ("gateway_session", "local"),
+                ("internal_kanban", "kanban"),
+                ("internal_tool", "tool"),
+                ("internal_oneshot", "oneshot"),
+            ):
+                db.create_session(session_id, source)
+                db.set_session_title(session_id, session_id)
+
+            cli_obj = _make_cli()
+            cli_obj._session_db = db
+
+            rows = cli_obj._list_recent_sessions(limit=10)
+
+            assert {row["id"] for row in rows} == {"cli_session", "gateway_session"}
+        finally:
+            db.close()
+
     def test_show_recent_sessions_includes_indexes_and_resume_hint(self, capsys):
         cli_obj = _make_cli()
         cli_obj._list_recent_sessions = MagicMock(return_value=[

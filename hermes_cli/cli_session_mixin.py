@@ -376,7 +376,7 @@ class CLISessionMixin:
         self._console_print("\n".join(lines), highlight=False, markup=False)
 
     def _list_recent_sessions(self, limit: int = 10) -> list[dict[str, Any]]:
-        """Return recent CLI sessions for in-chat browsing/resume affordances."""
+        """Return recent human sessions for in-chat browsing/resume affordances."""
         if not self._session_db:
             return []
         try:
@@ -384,8 +384,8 @@ class CLISessionMixin:
             from hermes_state_sessions import INTERNAL_LISTING_SOURCES
 
             return query_session_listing(
-                self._session_db, source="cli", current_session_id=self.session_id,
-                include_all_sources=False, include_unnamed=True, limit=limit,
+                self._session_db, source=None, current_session_id=self.session_id,
+                include_all_sources=True, include_unnamed=True, limit=limit,
                 exclude_sources=list(INTERNAL_LISTING_SOURCES))
         except Exception:
             return []
