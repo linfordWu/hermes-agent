@@ -55,6 +55,7 @@ from hermes_cli.plugins_dispatch import (
     _HOOK_CALLBACK_TIMEOUT_SECS, _HOOK_TIMEOUT_SUPPRESSION_SECONDS, _MAX_HOOK_CALLBACK_TIMEOUT_SECS,
     _PRE_TOOL_CALL_TIMEOUT_BLOCK_MESSAGE, PluginDispatchMixin, PluginSystemPromptSection,
     RenderedPluginSystemPromptSection, _EventSubscription, format_system_prompt_sections,
+    get_plugin_command_entry, get_plugin_command_handler,
     is_valid_system_prompt_section_id, resolve_plugin_command_result,
 )
 from hermes_cli.plugins_ledger import PluginLedgerMixin, PluginRegistration
@@ -642,11 +643,12 @@ class PluginContext:
     @_serialized_replacement
     def register_command(
         self, name: str, handler: Callable, description: str = "", args_hint: str = "",
-        argument_mode: str | None = None,
+        argument_mode: str | None = None, output_mode: str = "notice",
     ) -> Optional[PluginRegistration]:
         """Register an in-session slash command (``/name``); handler ``fn(raw_args: str) -> str | None``
         (sync or async), plus the session-context keywords it declares (``plugin_command_dispatch``). ``args_hint`` (e.g. ``"<file>"``) lets adapters like Discord surface an argument
-        field; without it the command registers parameterless there but still accepts trailing text."""
+        field; without it the command registers parameterless there but still accepts trailing text.
+        ``output_mode="transcript"`` keeps long output in the TUI transcript instead of its pager."""
         clean = name.lower().strip().lstrip("/").replace(" ", "-")
         if not clean:
             logger.warning("Plugin '%s' tried to register a command with an empty name.", self.manifest.name)
@@ -663,6 +665,7 @@ class PluginContext:
             "plugin": self.manifest.name, "plugin_key": self.plugin_id, "args_hint": hint,
             "argument_mode": argument_mode if argument_mode in {"options", "text", "mixed"}
             else ("text" if hint else None),
+            "output_mode": output_mode if output_mode in {"notice", "transcript"} else "notice",
         }
         return self._register_entry("command", clean, self._manager._plugin_commands, entry,
                                     "Plugin %s registered command: /%s", clean)
@@ -2186,12 +2189,6 @@ def _ensure_plugins_discovered(force: bool = False) -> PluginManager:
 def get_plugin_context_engine():
     """Return the plugin-registered context engine, or None."""
     return _ensure_plugins_discovered()._context_engine
-
-
-def get_plugin_command_handler(name: str) -> Optional[Callable]:
-    """Return the handler for a plugin-registered slash command, or ``None``."""
-    entry = _ensure_plugins_discovered()._plugin_commands.get(name)
-    return entry["handler"] if entry else None
 
 
 def get_plugin_commands() -> dict[str, dict]:

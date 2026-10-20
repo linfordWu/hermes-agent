@@ -23,6 +23,19 @@ from hermes_cli.middleware import OBSERVER_SCHEMA_VERSION
 
 logger = logging.getLogger("hermes_cli.plugins")
 
+
+def get_plugin_command_entry(name: str) -> Optional[dict]:
+    """Return a registered slash-command entry, including its output policy."""
+    from hermes_cli.plugins import _ensure_plugins_discovered
+    return _ensure_plugins_discovered()._plugin_commands.get(name)
+
+
+def get_plugin_command_handler(name: str) -> Optional[Callable]:
+    """Return the handler for a plugin-registered slash command, or ``None``."""
+    entry = get_plugin_command_entry(name)
+    return entry["handler"] if entry else None
+
+
 # Allowlist of agent-turn hot-path hooks bounded by plugins.hook_callback_timeout (fail-open:
 # abandon without join — joining reintroduced a shutdown hang). Unlisted hooks run synchronously.
 # Intentionally unbounded: on_session_finalize/reset (last-chance flush — abandon can lose state);
