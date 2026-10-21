@@ -601,6 +601,28 @@ class TestSweepOrphanedSessions:
         assert second["pruned"] == 1
         assert db.get_session("recovered-0") is None
 
+    def test_auto_prune_closes_and_later_deletes_local_sessions(self, db):
+        """Peer-refreshed TUI/Desktop sessions use source='local' and must not become immortal."""
+        stale = time.time() - 200 * 86400
+        _make_session(db, "local-stale", source="local", started_at=stale, message_at=stale)
+        _set_last_activity(db, "local-stale", stale)
+
+        first = db.maybe_auto_prune_and_vacuum(
+            retention_days=90, min_interval_hours=0, vacuum=False
+        )
+        assert first["closed"] == 1
+        assert db.get_session("local-stale")["end_reason"] == "startup_orphan_reap"
+
+        db._conn.execute(
+            "UPDATE sessions SET ended_at = ended_at - 91 * 86400 WHERE id = 'local-stale'"
+        )
+        db._conn.commit()
+        second = db.maybe_auto_prune_and_vacuum(
+            retention_days=90, min_interval_hours=0, vacuum=False
+        )
+        assert second["pruned"] == 1
+        assert db.get_session("local-stale") is None
+
     def test_real_recovery_placeholders_age_out_but_fresh_one_stays_open(self, db, tmp_path):
         """Through the real `_reconstruct_missing_sessions` path: a stale placeholder is closed
         then deleted; a fresh one is left open (source survives as 'recovered')."""

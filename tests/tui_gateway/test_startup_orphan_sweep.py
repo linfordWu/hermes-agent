@@ -39,11 +39,12 @@ def _seed_session(db, session_id, *, source, last_active, started_at=None):
 
 
 class TestSweepOrphanedSessionRows:
-    def test_ends_stale_tui_desktop_and_subagent(self, monkeypatch, tmp_path):
+    def test_ends_stale_tui_desktop_local_and_subagent(self, monkeypatch, tmp_path):
         db = SessionDB(tmp_path / "state.db")
         stale = time.time() - 8 * 3600
         _seed_session(db, "stale-tui", source="tui", last_active=stale)
         _seed_session(db, "stale-desktop", source="desktop", last_active=stale)
+        _seed_session(db, "stale-local", source="local", last_active=stale)
         _seed_session(db, "stale-sub", source="subagent", last_active=stale)
         monkeypatch.setattr(server, "_get_db", lambda: db)
         monkeypatch.setattr(server, "_SESSION_TTL_S", float(IDLE_S))
@@ -51,8 +52,8 @@ class TestSweepOrphanedSessionRows:
 
         swept = server._sweep_orphaned_session_rows()
 
-        assert sorted(swept) == ["stale-desktop", "stale-sub", "stale-tui"]
-        for sid in ("stale-tui", "stale-desktop", "stale-sub"):
+        assert sorted(swept) == ["stale-desktop", "stale-local", "stale-sub", "stale-tui"]
+        for sid in ("stale-tui", "stale-desktop", "stale-local", "stale-sub"):
             row = db.get_session(sid)
             assert row["ended_at"] is not None
             assert row["end_reason"] == "startup_orphan_reap"

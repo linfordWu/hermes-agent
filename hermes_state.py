@@ -468,12 +468,13 @@ class SessionDB(
 ):
     """SQLite-backed session storage with FTS5 search; many reader threads, one writer (WAL)."""
 
-    # Only these state-owned producers join automatic stale-open reconciliation; messaging/UI
-    # sources have their own lifecycle owners; unknown sources fail closed.
+    # These producers join automatic stale-open reconciliation. TUI/Desktop rows that have
+    # been peer-refreshed are persisted as `local`, so include that normalized source here;
+    # other messaging/UI sources retain their own lifecycle owners and unknown sources fail closed.
     # See #60609.  `recovered` = placeholders `hermes sessions recover` synthesizes for
     # orphaned messages (no live owner, never stamped ended_at); without it they are immortal.
     _AUTO_PRUNE_STALE_OPEN_SOURCES: tuple[str, ...] = (
-        "cli", "cron", "kanban", "acp", "api_server", "subagent", "tool", "recovered",
+        "cli", "cron", "kanban", "acp", "api_server", "subagent", "tool", "recovered", "local",
     )
 
     # ── Write-contention tuning ──

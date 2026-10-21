@@ -389,7 +389,9 @@ def _schedule_session_cap_enforcement() -> None:
 # conservative. Disable via `dashboard.startup_orphan_sweep: false`.
 # This is the startup complement every other resource type already has (docker_orphan_reaper, compression
 # orphans). See #65194.
-_ORPHAN_SWEEP_SOURCES = ("tui", "desktop", "subagent", "unknown")
+# Peer-refreshed TUI/Desktop sessions are stored as `local`; the sweep's age, heartbeat,
+# in-memory ownership, lease and pin checks still protect live sessions.
+_ORPHAN_SWEEP_SOURCES = ("tui", "desktop", "local", "subagent", "unknown")
 _startup_orphan_sweep_ran = False
 _startup_orphan_sweep_lock = threading.Lock()
 
