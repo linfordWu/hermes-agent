@@ -1659,6 +1659,8 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         model supports native vision; the caller consumes that buffer at ``run_conversation``."""
         rehome_inbound_media(event)  # before any consumer (vision, STT, document notes) reads media_urls
         _pending_stt_prepared = hasattr(event, "_gateway_pending_stt_text")
+        event._gateway_inbound_image_paths = []
+        event._gateway_inbound_image_caption = ""
         message_text = (event._gateway_pending_stt_text if _pending_stt_prepared else event.text) or ""
         # Prefer the caller's resolved session key so this write key matches the consume key at the
         # run_conversation site; derive it here only for tests and legacy standalone callers.
@@ -1669,6 +1671,10 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         message_text = self._prefix_inbound_sender_context(event, source, message_text)
         image_paths, audio_paths, audio_file_paths, video_paths = self._classify_inbound_media(event, _pending_stt_prepared)
         if image_paths:
+            # Persistence must keep the authored caption and local refs; text-mode vision
+            # enrichment below is model-only and cannot render Desktop history thumbnails.
+            event._gateway_inbound_image_paths = list(image_paths)
+            event._gateway_inbound_image_caption = message_text
             message_text = await self._enrich_inbound_images(source, session_key, message_text, image_paths)
         if audio_paths:
             message_text = await self._enrich_inbound_voice(event, source, message_text, audio_paths)

@@ -604,6 +604,14 @@ class GatewayTurnPrepareMixin:
             if message_text and isinstance(message_text, str):
                 _clean_message_text, _embedded_ts = _strip_msg_ts(message_text, tz=_evt_tz)
                 persist_user_message = strip_discord_triggering_note(event, _clean_message_text)
+                _image_paths = getattr(event, "_gateway_inbound_image_paths", None) or []
+                if _image_paths:
+                    from agent.context_references import build_persist_message_with_image_refs
+                    _image_caption = getattr(event, "_gateway_inbound_image_caption", "") or ""
+                    _clean_caption, _ = _strip_msg_ts(_image_caption, tz=_evt_tz)
+                    persist_user_message = build_persist_message_with_image_refs(
+                        strip_discord_triggering_note(event, _clean_caption), _image_paths,
+                    )
                 _event_epoch = _coerce_msg_ts(getattr(event, "timestamp", None), tz=_evt_tz)
                 persist_user_timestamp = _event_epoch if _event_epoch is not None else _embedded_ts
                 if _message_timestamps_enabled(_load_gateway_config()):

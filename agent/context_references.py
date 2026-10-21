@@ -149,6 +149,17 @@ def format_reference_value(value: str) -> str:
     return value
 
 
+def build_persist_message_with_image_refs(user_text: str, image_paths: list[str]) -> str:
+    """Keep attached images renderable in persisted transcripts with trailing ``@image:`` refs."""
+    text = user_text or ""
+    refs = "\n".join(
+        f"@image:{format_reference_value(path)}" for path in image_paths if Path(path).exists()
+    )
+    if not refs:
+        return text
+    return f"{text}\n{refs}" if text else refs
+
+
 def parse_context_references(message: str, *, plugins: bool = True) -> list[ContextReference]:
     """``plugins=False`` reads built-in kinds only (a safe-mode / config-bypass session loads no plugins)."""
     refs: list[ContextReference] = []

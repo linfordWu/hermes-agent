@@ -48,23 +48,13 @@ def _build_image_ref_message(user_text: str, image_paths: list[str]) -> str:
     return text or "What do you see in this image?"
 
 
-def _build_persist_message_with_image_refs(user_text: str, image_paths: list[str]) -> str:
-    """Persisted form of the user's message: ``@image:<path>`` directives (the desktop renders them as
-    images); ``_build_image_ref_message``'s ``image_url:`` hint is model-only, never persisted. Caption
-    first, directives last: session previews are the first 60 chars of the first user message."""
-    from agent.context_references import format_reference_value
-    text = user_text or ""
-    refs = "\n".join(f"@image:{format_reference_value(p)}" for p in image_paths if Path(p).exists())
-    if not refs:
-        return text
-    return f"{text}\n{refs}" if text else refs
-
-
 def _build_persist_user_message(user_text: str, image_paths: list[str], run_message: Any) -> Any:
     """Shape the persisted user turn like the model payload: ``_flush_messages_to_session_db`` ignores a
     plain-string override for a list (native-vision) payload, so swap only the text part for the
     ``@image:`` form, keep image parts, drop API-only text parts (barge-in note)."""
-    persist_text = _build_persist_message_with_image_refs(user_text, image_paths)
+    from agent.context_references import build_persist_message_with_image_refs
+
+    persist_text = build_persist_message_with_image_refs(user_text, image_paths)
     if not isinstance(run_message, list):
         return persist_text
     image_parts = [p for p in run_message if not (isinstance(p, dict) and p.get("type") == "text")]
