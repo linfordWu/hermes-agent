@@ -322,14 +322,24 @@ class SessionAuthority:
 
     async def attach(self, actor, ref):
         self.authorize(actor, ref, 'session:read')
+        # A reconnect inside the CLI orphan grace window keeps the existing local session alive.
+        from gateway.session_viewer_orphan import cancel_cli_orphan_close
+        orphan_close_was_pending = cancel_cli_orphan_close(self, ref.session_id)
         from gateway.session_local_recovery import local_history, prepare_history
-        prepared = await prepare_history(self, ref)  # the lineage read stays off the loop and the lock
-        from gateway.session_onboarding import keep_from_discard
-        # The last await before the viewer joins: a fresh launch's claim is taken back with no yield
-        # before the join, and a delete already past it answers not_found below.
-        await keep_from_discard(self, ref.session_id)
-        # A delete or eviction can land during those awaits: re-check, so it answers not_found, never a KeyError.
-        self.authorize(actor, ref, 'session:read')
+        try:
+            prepared = await prepare_history(self, ref)  # the lineage read stays off the loop and the lock
+            from gateway.session_onboarding import keep_from_discard
+            # The last await before the viewer joins: a fresh launch's claim is taken back with no yield
+            # before the join, and a delete already past it answers not_found below.
+            await keep_from_discard(self, ref.session_id)
+            # A delete or eviction can land during those awaits: re-check, so it answers not_found, never a KeyError.
+            self.authorize(actor, ref, 'session:read')
+        except BaseException:
+            # A failed/cancelled reconnect must not turn an orphaned CLI row into an immortal one.
+            if orphan_close_was_pending:
+                from gateway.session_viewer_orphan import schedule_cli_orphan_close
+                schedule_cli_orphan_close(self, ref.session_id)
+            raise
         live = self.sessions[ref.session_id]
         from gateway.session_queued_controls import pending_rows
         with live.event_stream.lock:

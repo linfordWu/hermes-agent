@@ -863,6 +863,10 @@ class AuthorityConnection:
             live = self.authority.sessions.get(session_id)
             if live is not None and subscription in live.subscribers:
                 await self.authority.detach(self.actor, subscription)
+                # A dead classic-CLI process cannot send session.detach with an end_reason. Treat
+                # its last transport close as a viewer close after the reconnect grace window.
+                from gateway.session_viewer_orphan import schedule_cli_orphan_close
+                schedule_cli_orphan_close(self.authority, session_id)
         from gateway.session_local_migration import unbind_native_transport
         unbind_native_transport(self.authority, self.actor)
         self.subscriptions.clear()

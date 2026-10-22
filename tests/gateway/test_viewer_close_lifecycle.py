@@ -1,6 +1,6 @@
 """The owner runs a session's end-of-conversation lifecycle when its last viewer closes it.
 
-Regression for #134889 LC-1/LC-2/LC-6. Main's classic CLI and TUI ran the memory providers'
+Regression for #134889 LC-1/LC-2/LC-6 and #142841. Main's classic CLI and TUI ran the memory providers'
 ``on_session_end`` commit and plugin ``on_session_finalize`` (which closes the Relay scope) in their own
 process at exit and ``/new``. Under the gateway the client is a viewer with no memory manager, so
 nothing ran until idle eviction; and a close sent while a turn was live left ``ended_at`` unset for good.
@@ -58,8 +58,8 @@ async def _call(conn, method, **params):
     return reply['result']
 
 
-async def _open(db, authority, tmp_path):
-    db.create_session('chat', source='cli', model='fake-model', cwd=str(tmp_path))
+async def _open(db, authority, tmp_path, *, source='cli'):
+    db.create_session('chat', source=source, model='fake-model', cwd=str(tmp_path))
     db.append_message('chat', 'user', 'q')
     db.append_message('chat', 'assistant', 'a')
     viewer = _viewer(authority, tmp_path)
@@ -89,6 +89,71 @@ async def test_last_viewer_close_commits_memory_and_finalizes_on_the_owner(tmp_p
     assert db.get_session('chat')['end_reason'] == 'cli_close'
     assert calls == [('commit', route), ('finalize', {
         'session_id': 'chat', 'platform': 'cli', 'reason': 'cli_close', 'session_key': route})]
+
+
+@pytest.mark.asyncio
+async def test_transport_close_reaps_a_classic_cli_session_after_reconnect_grace(tmp_path, monkeypatch):
+    import gateway.session_viewer_orphan as orphan
+
+    monkeypatch.setattr(orphan, '_orphan_grace_seconds', lambda: 0.01)
+    db, authority, calls = await _owner(tmp_path, monkeypatch)
+    viewer, _subscription = await _open(db, authority, tmp_path)
+    route = authority.sessions['chat'].route
+
+    await viewer.close()
+
+    assert db.get_session('chat')['end_reason'] is None
+    await async_wait_until(lambda: db.get_session('chat')['end_reason'] == 'cli_close')
+    assert calls == [('commit', route), ('finalize', {
+        'session_id': 'chat', 'platform': 'cli', 'reason': 'cli_close', 'session_key': route})]
+
+
+@pytest.mark.asyncio
+async def test_cli_transport_reconnect_cancels_orphan_close(tmp_path, monkeypatch):
+    import gateway.session_viewer_orphan as orphan
+
+    monkeypatch.setattr(orphan, '_orphan_grace_seconds', lambda: 0.05)
+    db, authority, calls = await _owner(tmp_path, monkeypatch)
+    viewer, _subscription = await _open(db, authority, tmp_path)
+
+    await viewer.close()
+    reconnect = _viewer(authority, tmp_path)
+    await _call(reconnect, 'session.resume', session_id='chat')
+    await async_wait_until(lambda: not authority._cli_orphan_close_tasks)
+
+    assert calls == [] and db.get_session('chat')['end_reason'] is None
+
+
+@pytest.mark.asyncio
+async def test_transport_close_reaps_a_oneshot_session_after_reconnect_grace(tmp_path, monkeypatch):
+    import gateway.session_viewer_orphan as orphan
+
+    monkeypatch.setattr(orphan, '_orphan_grace_seconds', lambda: 0.01)
+    db, authority, calls = await _owner(tmp_path, monkeypatch)
+    viewer, _subscription = await _open(db, authority, tmp_path, source='oneshot')
+
+    await viewer.close()
+    await async_wait_until(lambda: db.get_session('chat')['end_reason'] == 'cli_close')
+
+    assert any(name == 'finalize' for name, _ in calls)
+
+
+@pytest.mark.asyncio
+async def test_transport_close_does_not_reap_a_tui_session(tmp_path, monkeypatch):
+    import gateway.session_viewer_orphan as orphan
+
+    monkeypatch.setattr(orphan, '_orphan_grace_seconds', lambda: 0.01)
+    db, authority, calls = await _owner(tmp_path, monkeypatch)
+    db.create_session('chat', source='tui', model='fake-model', cwd=str(tmp_path))
+    db.append_message('chat', 'user', 'q')
+    db.append_message('chat', 'assistant', 'a')
+    viewer = _viewer(authority, tmp_path)
+    await _call(viewer, 'session.resume', session_id='chat')
+
+    await viewer.close()
+
+    assert not getattr(authority, '_cli_orphan_close_tasks', {})
+    assert calls == [] and db.get_session('chat')['end_reason'] is None
 
 
 @pytest.mark.asyncio
