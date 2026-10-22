@@ -587,7 +587,10 @@ _TOKEN_BODY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 
 
 def _compile_prefix_matcher(patterns: list) -> re.Pattern[str]:
-    return re.compile(r"(?<![A-Za-z0-9_-])(" + "|".join(patterns) + r")(?![A-Za-z0-9_-])")
+    # Underscore can delimit a token whose own pattern only accepts alphanumerics.
+    # Patterns that accept underscores consume them as part of the token, so keep
+    # them out of the shared trailing boundary to avoid dropping valid secrets.
+    return re.compile(r"(?<![A-Za-z0-9_-])(" + "|".join(patterns) + r")(?![A-Za-z0-9-])")
 
 
 _PREFIX_RE = _compile_prefix_matcher(_PREFIX_PATTERNS)

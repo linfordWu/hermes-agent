@@ -19,6 +19,15 @@ def _ensure_redaction_enabled(monkeypatch):
 
 class TestKnownPrefixes:
 
+    def test_alphanumeric_prefix_tokens_redact_before_underscore_suffix(self):
+        """An underscore after an alphanumeric-only key body is a delimiter, not a reason to miss it."""
+        for prefix in ("ghp_", "hf_", "npm_", "exa_", "dop_v1_"):
+            token = prefix + "A" * 32
+            text = f"value {token}_SUFFIX here"
+            redacted = redact_sensitive_text(text)
+            assert token not in redacted, redacted
+            assert "_SUFFIX" in redacted, redacted
+
     def test_dotted_sk_and_prefixless_zhipu_keys_fully_masked_on_every_surface(self):
         """A key whose body carries dots must never leave a cleartext tail, and the
         prefix-less Zhipu ``id.secret`` shape must mask at all: on the terminal
