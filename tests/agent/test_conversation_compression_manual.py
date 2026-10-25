@@ -49,6 +49,37 @@ def test_compressed_result_rejoins_verbatim_tail_and_never_mutates_input():
     assert agent._compress_context.call_args.kwargs["force"] is True
 
 
+def test_compress_here_disables_default_recent_tail_inside_the_selected_head():
+    """The user-selected boundary already supplies the verbatim tail; applying the normal 20-message
+    compressor tail again inside that head can leave almost nothing to summarize."""
+    agent, history = _agent(), _exchanges(20)
+    result = compress_now(agent, history, parse_compress_args("here 1"))
+    assert result.status == "compressed"
+    assert agent._compress_context.call_args.kwargs["protect_last_n_override"] == 0
+
+
+def test_context_compressor_override_releases_default_recent_tail():
+    """Manual boundary compression can summarize the selected head past the default recent-message guard."""
+    from agent.context_compressor import ContextCompressor
+
+    compressor = ContextCompressor.__new__(ContextCompressor)
+    compressor.protect_first_n = 0
+    compressor.protect_last_n = 20
+    compressor.tail_token_budget = 10**9
+    compressor.compression_count = 0
+    compressor._previous_summary = None
+    compressor._find_last_user_message_idx = MagicMock(return_value=-1)
+    compressor._ensure_last_user_message_in_tail = MagicMock(side_effect=lambda _messages, cut, _head_end: cut)
+    compressor._ensure_last_assistant_message_in_tail = MagicMock(side_effect=lambda _messages, cut, _head_end: cut)
+    compressor._align_boundary_backward = MagicMock(side_effect=lambda _messages, cut: cut)
+    history = _exchanges(20)
+    head_end = compressor._protect_head_size(history)
+    default_cut = compressor._find_tail_cut_by_tokens(history, head_end, 10**9)
+    manual_cut = compressor._find_tail_cut_by_tokens(
+        history, head_end, 10**9, protect_last_n_override=0)
+    assert manual_cut > default_cut
+
+
 @pytest.mark.parametrize("surface", ["cli", "gateway", "tui", "acp"])
 def test_every_surface_honours_preview_without_compressing(surface, monkeypatch):
     """The prompt-cache-breaking mutation must be gated by the same ``--preview`` on all four surfaces."""

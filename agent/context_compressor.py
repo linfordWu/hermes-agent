@@ -4975,7 +4975,7 @@ Write only the summary body. Do not include any preamble or prefix."""
 
     def _find_tail_cut_by_tokens(
         self, messages: list[dict[str, Any]], head_end: int, token_budget: int | None = None,
-        *, allow_split_turn: bool = True,
+        *, allow_split_turn: bool = True, protect_last_n_override: int | None = None,
     ) -> int:
         """Walk backward accumulating tokens until the budget; return the tail start index.
         Optional rows are bounded by a 1.5x soft ceiling. Required last-user/last-assistant (and
@@ -4988,7 +4988,8 @@ Write only the summary body. Do not include any preamble or prefix."""
         # Bounded recent-message floor: protect_last_n is a minimum up to a cap so bulky tool runs
         # aren't all kept.
         available_tail = max(0, n - head_end - 1)
-        min_tail_floor = max(3, min(self.protect_last_n, _MAX_TAIL_MESSAGE_FLOOR))
+        protect_last_n = self.protect_last_n if protect_last_n_override is None else max(0, protect_last_n_override)
+        min_tail_floor = max(3, min(protect_last_n, _MAX_TAIL_MESSAGE_FLOOR))
         # Keep >= 2 non-head messages summarizable so a tiny middle still saves messages.
         compressible_tail_cap = max(3, available_tail - 2)
         min_tail = min(min_tail_floor, compressible_tail_cap, available_tail) if available_tail > 1 else 0
@@ -5198,10 +5199,10 @@ Write only the summary body. Do not include any preamble or prefix."""
         blank = self._blank_echo_indices_after(messages, self._find_last_user_message_idx(messages, 0))
         return [m for idx, m in enumerate(messages) if idx not in blank] if blank else messages
 
-    def _compress_window(self, messages: list[dict[str, Any]]) -> tuple[int, int]:
+    def _compress_window(self, messages: list[dict[str, Any]], *, protect_last_n_override: int | None = None) -> tuple[int, int]:
         """Return ``(compress_start, compress_end)`` for the summarizable middle."""
         compress_start = self._align_boundary_forward(messages, self._protect_head_size(messages))
-        compress_end = self._find_tail_cut_by_tokens(messages, compress_start)
+        compress_end = self._find_tail_cut_by_tokens(messages, compress_start, protect_last_n_override=protect_last_n_override)
         # A role collision can merge the summary into the first tail row; keep an actionable user
         # event out of that slot by retaining an older assistant/tool bridge.
         latest_actionable_idx = self._find_last_user_message_idx(messages, 0)
@@ -5443,18 +5444,17 @@ Write only the summary body. Do not include any preamble or prefix."""
     def compress(
         self, messages: list[dict[str, Any]], current_tokens: Optional[int] = None, focus_topic: Optional[str] = None,
         force: bool = False, memory_context: str = "", bypass_cooldown: bool = False,
+        protect_last_n_override: int | None = None,
     ) -> list[dict[str, Any]]:
         """Summarize the middle turns: prune tool-result bodies (tool-call args untouched), protect head and a
-        token-budget tail from the pruned copy, summarize, then clean orphaned tool pairs. ``force`` clears the failure cooldown and bypasses
-        the feasibility skip; ``bypass_cooldown`` runs the summary LLM without clearing the cooldown.
+        token-budget tail from the pruned copy, then summarize and clean orphaned tool pairs. ``force`` clears
+        the failure cooldown and bypasses the feasibility skip; ``bypass_cooldown`` runs the summary LLM without
+        clearing the cooldown.
 
-        Args: focus_topic: Optional focus string for guided compression. When provided, the summariser will
-        prioritise preserving information related to this topic and be more aggressive about compressing
-        everything else. Inspired by Claude Code's ``/compact``. force: If True, clear any active
-        summary-failure cooldown before running so a manual ``/compress`` can retry immediately after an
-        auto-compression abort, and bypass the pre-LLM feasibility skip so an explicit user request always
-        exercises the full summary path. Auto-compress callers pass False. memory_context: Optional
-        provider-supplied context to preserve in the summary prompt. Whitespace-only values are ignored.
+        Args: focus_topic: Optional focus string for guided compression; prioritise related information and
+        compress everything else. force: If True, clear cooldown and bypass feasibility skip for a manual retry
+        after abort; auto-compress callers pass False. memory_context: Optional provider-supplied summary context;
+        whitespace-only values are ignored.
         bypass_cooldown: If True, run the summary LLM even while the summary-failure cooldown is armed,
         WITHOUT clearing it (#100661). Set by provider-proven overflow recovery, which is already bounded by
         the caller's attempt budget.
@@ -5481,15 +5481,15 @@ Write only the summary body. Do not include any preamble or prefix."""
         # assembled and measured from the pruned copy (#61932).
         canonical_messages = self._drop_blank_echoes(messages)
         # Phase 1: Prune old tool results (cheap, no LLM call)
-        messages, pruned_count = self._prune_old_tool_results(
-            messages, protect_tail_count=self.protect_last_n, protect_tail_tokens=self.tail_token_budget,
-        )
+        messages, pruned_count = self._prune_old_tool_results(messages, protect_tail_count=(
+            self.protect_last_n if protect_last_n_override is None else max(0, protect_last_n_override)),
+            protect_tail_tokens=self.tail_token_budget)
         if pruned_count and not self.quiet_mode:
             logger.info("Pre-compression: pruned %d old tool result(s)", pruned_count)
         messages = self._drop_blank_echoes(messages)
         n_messages = len(messages)
         # Phase 2: Determine boundaries (on the pruned copy so a pressure-demoted tail can compress, #61932)
-        compress_start, compress_end = self._compress_window(messages)
+        compress_start, compress_end = self._compress_window(messages, protect_last_n_override=protect_last_n_override)
         if compress_start >= compress_end:
             self._record_compression_regions(
                 head_messages=messages[:compress_start], middle_messages=[], tail_messages=messages[compress_end:],

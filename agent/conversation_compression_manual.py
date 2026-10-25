@@ -130,6 +130,7 @@ def compress_now(
             head, system_message, approx_tokens=before_tokens, focus_topic=request.focus_topic, force=True,
             defer_context_engine_notification=True, **({"task_id": task_id} if task_id != "default" else {}),
             **({"snapshot_is_current": snapshot_is_current} if snapshot_is_current is not None else {}),
+            **({"protect_last_n_override": 0} if request.partial and tail else {}),
             **({"verbatim_tail": tail_rows} if tail_rows else {}))
     except Exception:
         finalize_context_engine_compression_notification(agent, committed=False)

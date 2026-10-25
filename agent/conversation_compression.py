@@ -1689,7 +1689,7 @@ def _compression_lock_holder(agent: Any) -> str:
 
 def _supported_compression_kwargs(
     compress_fn: Any, *, current_tokens: Optional[int], focus_topic: Optional[str], force: bool,
-    memory_context: str, bypass_cooldown: bool = False,
+    memory_context: str, bypass_cooldown: bool = False, protect_last_n_override: int | None = None,
 ) -> dict:
     """Return only compression kwargs accepted by an engine callable.
     Inspecting first keeps older plugin signatures compatible without catching ``TypeError`` and running a
@@ -1699,6 +1699,7 @@ def _supported_compression_kwargs(
         candidates["bypass_cooldown"] = True
     if memory_context:
         candidates["memory_context"] = memory_context
+    candidates.update({"protect_last_n_override": protect_last_n_override} if protect_last_n_override is not None else {})
     try:
         parameters = inspect.signature(compress_fn).parameters
     except (TypeError, ValueError):
@@ -2927,13 +2928,13 @@ def _pre_compress_memory_context(agent: Any, messages: list, checkpoint_required
 
 def _resolve_compress_call(
     agent: Any, *, approx_tokens: Optional[int], focus_topic: Optional[str], force: bool, memory_context: str,
-    bypass_cooldown: bool,
+    bypass_cooldown: bool, protect_last_n_override: int | None = None,
 ) -> tuple[Callable[..., Any], dict[str, Any]]:
     """Bind ``compress()`` and only the kwargs its signature accepts."""
     compress_fn = agent.context_compressor.compress
     compress_kwargs = _supported_compression_kwargs(
         compress_fn, current_tokens=approx_tokens, focus_topic=focus_topic, force=force, memory_context=memory_context,
-        bypass_cooldown=bypass_cooldown,
+        bypass_cooldown=bypass_cooldown, protect_last_n_override=protect_last_n_override,
     )
     if memory_context.strip() and "memory_context" not in compress_kwargs:
         engine_name = getattr(agent.context_compressor, "name", type(agent.context_compressor).__name__)
@@ -3779,7 +3780,7 @@ def _run_summary_phase(
     agent: Any, messages: list, *, lease: _CompressionLease, in_place: bool, checkpoint_required: bool,
     approx_tokens: Optional[int], focus_topic: Optional[str], force: bool, bypass_cooldown: bool,
     commit_fence: Optional[CompressionCommitFence], hard_cancel_event: Any, system_message: str,
-    attempt: _Attempt,
+    attempt: _Attempt, protect_last_n_override: int | None = None,
 ) -> _SummaryPhase:
     """Adopt a grown durable parent, gather memory context and run the summarizer.
     A hard cancel restores the compressor snapshot + live list, records a stall backoff while the lease is
@@ -3809,7 +3810,7 @@ def _run_summary_phase(
         memory_context = _pre_compress_memory_context(agent, messages, checkpoint_required)
         compress_fn, compress_kwargs = _resolve_compress_call(
             agent, approx_tokens=approx_tokens, focus_topic=focus_topic, force=force, memory_context=memory_context,
-            bypass_cooldown=bypass_cooldown,
+            bypass_cooldown=bypass_cooldown, protect_last_n_override=protect_last_n_override,
         )
         messages_before_compression = copy.deepcopy(messages)
         _activity_heartbeat = _CompressionActivityHeartbeat(
@@ -3992,7 +3993,7 @@ def compress_context(
     bypass_cooldown: bool = False, defer_context_engine_notification: bool = False,
     commit_fence: Optional[CompressionCommitFence] = None, verbatim_tail: Optional[list] = None,
     trigger: Optional[str] = None, snapshot_is_current: Optional[Callable[[], bool]] = None,
-    overflow_reason: Optional[str] = None,
+    overflow_reason: Optional[str] = None, protect_last_n_override: int | None = None,
 ) -> tuple[list, str]:
     """Compress conversation context and split the session in SQLite.
     ``force`` (manual /compress) clears the summary-failure cooldown; ``bypass_cooldown`` (provider-proven
@@ -4002,11 +4003,9 @@ def compress_context(
     Args: agent: The owning :class:`AIAgent`. messages: Current message history (will be summarised).
     system_message: Current system prompt; used when compression needs a rebuilt cached prompt.
     approx_tokens: Pre-compression token estimate, logged for ops. task_id: Tool task scope (used for
-    clearing file-read dedup state). focus_topic: Optional focus string for guided compression — the
-    summariser will prioritise preserving information related to this topic. Inspired by Claude Code's
-    ``/compact <focus>``. force: If True, bypass any active summary-failure cooldown. Set by the manual
-    ``/compress`` slash command so users can retry immediately after an auto-compress abort. Auto-compress
-    callers use the default ``False``. bypass_cooldown: If True, the automatic breaker gates ignore ONLY the
+    clearing file-read dedup state). focus_topic: Optional focus string for guided compression, prioritised
+    by the summariser. force: If True, bypass the summary-failure cooldown so a manual ``/compress`` can retry
+    after an automatic abort; auto-compress callers use the default ``False``. bypass_cooldown: If True, the automatic breaker gates ignore ONLY the
     summary-failure cooldown for this attempt (#100661). Set by the provider-proven overflow recovery path:
     the provider already rejected the request, so deferring until the cooldown lapses wedges the session.
     Unlike ``force`` it does not clear the cooldown, and the ineffective/structural breakers still apply; a
@@ -4135,6 +4134,7 @@ def compress_context(
         agent, messages, lease=lease, in_place=in_place, checkpoint_required=checkpoint_required,
         approx_tokens=approx_tokens, focus_topic=focus_topic, force=force, bypass_cooldown=bypass_cooldown,
         commit_fence=commit_fence, hard_cancel_event=_hard_cancel_event, system_message=system_message, attempt=attempt,
+        protect_last_n_override=protect_last_n_override,
     )
     if phase.abort_prompt is not None:
         return phase.messages, phase.abort_prompt
