@@ -28,6 +28,19 @@ from agent.turn_context_compaction import (
 logger = logging.getLogger("agent.conversation_loop")
 
 
+def _request_exceeds_model_input_budget(compressor: Any, request_tokens: Any) -> bool:
+    """Check prompt fit after reserving the model's configured output budget."""
+    window = getattr(compressor, "context_length", None)
+    if isinstance(window, bool) or not isinstance(window, int) or window <= 0:
+        return False
+    if isinstance(request_tokens, bool) or not isinstance(request_tokens, int):
+        return False
+    reserve = getattr(compressor, "max_tokens", None)
+    reserve = reserve if isinstance(reserve, int) and not isinstance(reserve, bool) else 0
+    input_budget = window - max(0, reserve)
+    return request_tokens > (input_budget if input_budget > 0 else window)
+
+
 @dataclass
 class PreflightGateVerdict:
     """``action``: ``"fallthrough"`` (make the API call), ``"continue"`` (window grown or
@@ -161,11 +174,21 @@ def run_preflight_compression(
             compression_skipped_due_to_lock(agent) or compression_blocked_transiently(agent)
         ):
             # Temporary DEFER (lock held / cooldown), not evidence about compressibility:
-            # refund the attempt, leave the progress blocker unarmed and proceed.
+            # refund the attempt and leave the progress blocker unarmed. If the prompt plus
+            # reserved output cannot fit, fail closed before sending it; a concurrent summary
+            # may still be adopted on the next turn.
+            _blocked_by_lock = compression_skipped_due_to_lock(agent)
             v.compression_attempts -= 1
             v._last_preflight_pressure = None
             if v.pending_moa_prepared_request is moa_prepared_request:
                 v.pending_moa_prepared_request = None
+            if _request_exceeds_model_input_budget(compressor, request_pressure_tokens):
+                v.api_call_count = _refund_api_call(agent, v.api_call_count)
+                agent._persist_session(v.messages, v.conversation_history)
+                return _done("return", _compression_deferred_result(
+                    agent, v.messages, v.api_call_count,
+                    reason="lock" if _blocked_by_lock else "transient_block",
+                ))
         else:
             _reset_retry_state_after_compaction(agent)
             # Re-baseline the flush cursor: rotation returns None (child flushes

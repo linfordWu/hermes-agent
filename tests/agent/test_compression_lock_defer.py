@@ -27,6 +27,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agent.conversation_compression import compression_skipped_due_to_lock
+from agent.turn_preflight import PreflightGateVerdict, run_preflight_compression
 from run_agent import AIAgent
 
 
@@ -302,3 +303,52 @@ class TestPreApiLockDeferDoesNotBurnBudget:
         assert result["final_response"] == "Recovered after lock release"
         assert not result.get("compression_exhausted")
         assert not result.get("compression_deferred")
+
+
+def _run_pre_api_lock_defer(agent, pressure_tokens):
+    messages = list(_PREFILL)
+    compressor = SimpleNamespace(
+        context_length=262_144,
+        max_tokens=32_000,
+        threshold_tokens=200_000,
+        should_compress=lambda _tokens: True,
+        get_active_compression_failure_cooldown=lambda: None,
+    )
+    agent.context_compressor = compressor
+    agent.compression_enabled = True
+    agent._compression_feasibility_checked = True
+    agent._compression_skipped_due_to_lock = None
+    agent._compress_context = _lock_skipping_compress(agent)
+    agent._persist_session = MagicMock()
+    verdict = PreflightGateVerdict(
+        action="fallthrough", pending_moa_prepared_request=None, messages=messages,
+        active_system_prompt="You are helpful.", conversation_history=None, api_call_count=1,
+        compression_attempts=0, final_response=None, failed=False, _turn_exit_reason=None,
+        _compression_timeout_exhausted=False, _preflight_compression_blocked=False,
+        _provider_overflow_recovery_pending=False, _last_preflight_pressure=None,
+    )
+    return run_preflight_compression(
+        agent, verdict, compressor=compressor, request_pressure_tokens=pressure_tokens,
+        provider_overflow_preflight=False, defer_preflight=lambda _tokens: False,
+        moa_prepared_request=None, system_message="You are helpful.", user_message="hello",
+        max_compression_attempts=3, effective_task_id=None,
+    )
+
+
+class TestPreApiLockDeferRespectsOutputReservation:
+    def test_oversized_request_is_deferred_before_provider_call(self, agent):
+        # 257,249 prompt tokens fit the raw 262,144 window, but not after reserving
+        # 32,000 output tokens. While the hygiene summary owns the lock, don't send it.
+        verdict = _run_pre_api_lock_defer(agent, 257_249)
+
+        assert verdict.action == "return"
+        assert verdict.result["compression_deferred"] is True
+        assert verdict.result["failed"] is False
+        assert verdict.api_call_count == 0
+        agent._persist_session.assert_called_once()
+
+    def test_request_that_fits_prompt_and_output_still_proceeds(self, agent):
+        verdict = _run_pre_api_lock_defer(agent, 220_000)
+
+        assert verdict.action == "fallthrough"
+        assert verdict.result is None
