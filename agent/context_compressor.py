@@ -39,6 +39,7 @@ from agent.context_compressor_retry import retryable_user_text
 from agent.context_compressor_tail import (
     demote_stale_tail_tools, lean_tail_budget, is_demoted_stub, skill_view_names_by_call_id, tail_cut_pricer,
     elide_keeping_skill_safety_rule, with_skill_safety_rule, without_skill_safety_rule, tail_cut_progress_floor,
+    replace_oversized_request,
 )
 from agent.context_compressor_telemetry import CompressionTelemetryMixin
 from agent.error_classifier import FailoverReason, classify_api_error
@@ -4379,9 +4380,8 @@ Write only the summary body. Do not include any preamble or prefix."""
                 # and cut the request.
                 text = _redact_compaction_text(_authored_request_text(msg.get("content"))) or text
             text = re.sub(r"\s+", " ", text)
-            # Elide AFTER repr: repr would escape the marker's "Hermes's" and hide a copy from the
-            # guard. Authored text within the cap stays whole; a longer request split out of an
-            # oversized turn is restated verbatim by _reappend_inflight_user_task, not by this snapshot.
+            # Elide AFTER repr: repr would escape the marker's "Hermes's" and hide a copy from the guard.
+            # In-cap authored text stays whole; oversized unstarted turns are replaced in the replay tail.
             text = repr(text) if len(text) <= _ACTIVE_TASK_MAX_CHARS else elide(repr(text), _ACTIVE_TASK_MAX_CHARS)
             return (
                 f"User asked (deterministic, from compacted turns): {text}\n"
@@ -5384,7 +5384,7 @@ Write only the summary body. Do not include any preamble or prefix."""
         # end, and a replay user row there would strip a genuinely pending assistant(tool_calls).
         compressed = self._sanitize_tool_pairs(compressed)
         spared = _pending_tool_round(compressed) if spare_pending_images else range(0)
-        compressed = self._reappend_inflight_user_task(compressed, self._find_inflight_user_task(messages))
+        compressed = replace_oversized_request(self, compressed, messages, _estimate_msg_budget_tokens)
         self.compression_count += 1
         # Replace historical image payloads with placeholders; multi-MB base64 blobs otherwise
         # exceed body limits.

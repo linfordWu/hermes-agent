@@ -4,7 +4,7 @@ the Skill Safety Rule the compaction handoff carries whenever its transcript hol
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable, Optional
 
 # Demote tool results older than the newest N rounds so the tail budget binds
 # (the tool-group alignment floor otherwise keeps ~32K of tool output alive).
@@ -151,6 +151,49 @@ def tail_cut_progress_floor(compressor: Any, messages: list[dict[str, Any]], hea
     raised = compressor._align_boundary_forward(messages, newest + 2)
     last_user = compressor._find_last_user_message_idx(messages, newest + 1)
     return floor if raised >= len(messages) or 0 <= last_user < raised else raised
+
+
+def replace_oversized_request(
+    compressor: Any,
+    compressed: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+    estimate_msg_budget_tokens: Callable[[dict[str, Any]], int],
+) -> list[dict[str, Any]]:
+    """Replace an unstarted user row that cannot fit the protected tail with a resend notice.
+
+    A provider-rejected first request has no assistant/tool work to continue. Replaying a single
+    text row larger than the tail budget defeats compaction and can repeatedly execute the same
+    failed turn on each continuation. Keep the session usable and make the loss explicit instead
+    of sending the unbounded payload again. In-progress turns with assistant or tool rows remain
+    lossless: changing their request could change already-started work.
+    """
+    inflight = compressor._find_inflight_user_task(messages)
+    if inflight is not None and isinstance(inflight.get("content"), str):
+        content = inflight["content"]
+        fits_tail = estimate_msg_budget_tokens(inflight) <= compressor._tail_soft_ceiling(compressor.tail_token_budget)
+        if content.strip() and not fits_tail:
+            try:
+                index = next(i for i, message in enumerate(messages) if message is inflight)
+            except StopIteration:
+                index = -1
+            started = index >= 0 and any(
+                message.get("role") in {"assistant", "tool"} for message in messages[index + 1:]
+            )
+            if not started:
+                notice = (
+                    f"[Hermes context compaction omitted the previous user message ({len(content):,} characters) "
+                    "because it exceeded the available context budget. Do not act on the missing request; "
+                    "ask the user to resend a smaller version.]"
+                )
+                for message in compressed:
+                    if message.get("role") == "user" and isinstance(message.get("content"), str):
+                        current = message["content"]
+                        if content in current:
+                            message["content"] = current.replace(content, notice, 1)
+                            from agent.turn_context import drop_stale_api_content
+                            drop_stale_api_content(message)
+                inflight = {**inflight, "content": notice}
+    return compressor._reappend_inflight_user_task(compressed, inflight)
 
 
 def with_skill_safety_rule(

@@ -337,6 +337,55 @@ def test_reply_pointer_does_not_count_toward_the_request_size(gateway_kwargs: di
     assert actionable.count(_ACTIVE_REQUEST) == 1
 
 
+def test_single_oversized_unstarted_request_is_not_replayed_verbatim() -> None:
+    """A context-rejected first request must not survive compression as an endless replay.
+
+    Unlike an oversized in-progress turn with tool calls, this user row has not reached the
+    assistant yet. If it cannot fit the available tail budget, preserve the session and ask the
+    user to resend a smaller request instead of carrying hundreds of kilobytes into every retry.
+    """
+    compressor = _make_compressor(protect_first_n=1)
+    compressor.tail_token_budget = 1_000
+    oversized = '<div>inspect this node</div><img src="data:image/jpeg;base64,' + 'A' * 900_000 + '">'
+    messages = [{"role": "system", "content": "system"}]
+    for index in range(8):
+        messages.extend([
+            {"role": "user", "content": f"Earlier question {index}"},
+            {"role": "assistant", "content": f"Earlier answer {index}"},
+        ])
+    messages.append({"role": "user", "content": oversized})
+
+    with patch.object(compressor, "_generate_summary", return_value=None):
+        compressed = compressor.compress(messages, current_tokens=90_000, force=True)
+
+    visible = "\n".join(str(message.get("content") or "") for message in compressed)
+    assert oversized not in visible
+    assert "resend a smaller version" in visible.lower()
+    assert len(visible) < 20_000
+
+
+def test_single_oversized_started_request_remains_verbatim() -> None:
+    """Once tool work has started, compaction must keep the request losslessly."""
+    compressor = _make_compressor(protect_first_n=1)
+    compressor.tail_token_budget = 1_000
+    oversized = "inspect this node " + "A" * 900_000
+    messages = [{"role": "system", "content": "system"}]
+    for index in range(8):
+        messages.extend([
+            {"role": "user", "content": f"Earlier question {index}"},
+            {"role": "assistant", "content": f"Earlier answer {index}"},
+        ])
+    messages.append({"role": "user", "content": oversized})
+    messages.extend(_tool_group(0))
+
+    with patch.object(compressor, "_generate_summary", return_value=None):
+        compressed = compressor.compress(messages, current_tokens=90_000, force=True)
+
+    visible = "\n".join(str(message.get("content") or "") for message in compressed)
+    assert oversized in visible
+    assert "omitted the previous user message" not in visible
+
+
 def test_restated_reply_keeps_splitting_on_later_compactions() -> None:
     """After the first split the request is restated behind the replay header; later passes
     must keep splitting and restate it once.
