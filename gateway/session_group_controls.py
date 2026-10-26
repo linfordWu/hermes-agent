@@ -310,7 +310,7 @@ def _bot_sessions(authority, actor):
     Discovery is read-only: no legacy restore/unarchive or new SessionDB handle."""
     from tui_gateway.profile_roster_cache import cached_reader_session_fields
     operator = 'session:operator' in actor.capabilities
-    return cached_reader_session_fields(Path(authority.db.db_path).parent, (actor.subject, operator),
+    return cached_reader_session_fields(Path(authority.profile_id), (actor.subject, operator),
                                         lambda: _read_bot_sessions(authority.db, actor.subject, operator))
 
 

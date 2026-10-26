@@ -198,3 +198,70 @@ def test_draining_owner_still_answers_status_and_cancel_of_admitted_cron_work(tm
         asyncio.run(probe())
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_cron_scope_and_owner_use_profile_home_when_state_db_is_symlinked(tmp_path, monkeypatch):
+    """The state store may live outside the profile; cron runtime scope still belongs to profile_id."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    from contextlib import contextmanager
+    import json
+    import sys
+    from cron import scheduler
+    from gateway import session_cron
+    from gateway.session_authority import LiveSession, SessionAuthority
+    from gateway.session_contract import SessionRef
+    from hermes_state import SessionDB
+    from hermes_state_runtime import admit_session_input, begin_runtime_epoch, claim_session_input
+
+    profile_home = tmp_path / "profiles" / "alpha"
+    profile_home.mkdir(parents=True)
+    state_path = profile_home / "state.db"
+    db = SessionDB(state_path)
+    db.create_session('s', source='cron')
+    db.close()
+    store_home = tmp_path / "external-store"
+    store_home.mkdir()
+    external_state = store_home / "state.db"
+    state_path.replace(external_state)
+    state_path.symlink_to(external_state)
+    db = SessionDB(state_path)
+    authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(profile_home), instance_id='test',
+                                 db=db, epoch=begin_runtime_epoch(db, instance_id='test'))
+    authority.sessions['s'] = LiveSession(SimpleNamespace(platform=None, user_id='cron-owner'), 'route')
+    seen_scope = []
+
+    @contextmanager
+    def profile_scope(home):
+        seen_scope.append(home)
+        yield
+
+    config_reads = []
+
+    def load_gateway_config(path):
+        config_reads.append(path)
+        return {'model': {'default': 'profile-model'}}
+
+    monkeypatch.setitem(sys.modules, 'gateway.run', SimpleNamespace(
+        _profile_runtime_scope=profile_scope, _load_gateway_config=load_gateway_config))
+    monkeypatch.setattr(scheduler, 'run_job', lambda *a, **kw: (True, 'doc', 'answer', None))
+    request_id = 'cron:job:fire'
+    try:
+        session_cron.bind_owner(authority)
+        assert session_cron.owner_for_home(profile_home) is not None
+        from gateway.session_authorities import authority_for_home
+        from gateway.session_policy import profile_config
+        assert authority_for_home(SimpleNamespace(session_authority=authority), profile_home) is authority
+        assert profile_config(authority)['model']['default'] == 'profile-model'
+        assert config_reads == [profile_home / 'config.yaml']
+        with db:
+            admit_session_input(db, epoch=authority.epoch, principal_id='cron-owner', session_id='s',
+                                request_id=request_id, payload={'text': ''})
+            row = claim_session_input(db, epoch=authority.epoch, session_id='s')
+            policy = SimpleNamespace(request_json=json.dumps({
+                'extra_prompt': None, 'request_id': request_id, 'cron_job': {'id': 'job'}}))
+            assert await session_cron.execute(authority, SessionRef(str(profile_home), 's'), row, policy) == 'answer'
+        assert seen_scope == [profile_home]
+    finally:
+        session_cron.unbind_owner(authority)
+        db.close()

@@ -313,7 +313,7 @@ def adopt_legacy_session(authority, actor, row):
                'legacy_session_id': row['id'], 'lineage': [row['id']]}
     try:
         # Same lock order as old Bot Chat: mailbox (if any), liveness, SQLite.
-        with active_session_liveness_guard(row['id'], registry_home=Path(authority.db.db_path).parent) as active:
+        with active_session_liveness_guard(row['id'], registry_home=Path(authority.profile_id)) as active:
             if active:
                 raise RuntimeStoreError('runtime_coordination_required')
             commit_local_session(authority.db, epoch=authority.epoch, receipt=receipt)

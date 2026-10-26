@@ -325,7 +325,7 @@ async def test_provider_change_drops_the_launch_key_and_keeps_config_secrets(tmp
         success=True, new_model='b', target_provider='anthropic', provider_changed=True,
         base_url='https://api.anthropic.com'))
     with SessionDB(tmp_path / 'state.db') as db:
-        authority = SimpleNamespace(instance_id='i', epoch=1, profile_id='p', db=db, runner=SimpleNamespace(
+        authority = SimpleNamespace(instance_id='i', epoch=1, profile_id=str(tmp_path), db=db, runner=SimpleNamespace(
             _resolve_session_agent_runtime=lambda **k: (None, {'api_key': 'sk-launch'})))
         private = {}
         config = {'model': {'provider': 'openrouter', 'default': 'a'},
@@ -368,7 +368,7 @@ async def test_model_pick_reads_current_provider_config_when_legacy_policy_lacks
     monkeypatch.setattr(model_switch, 'switch_model', switch)
     monkeypatch.setenv('INKSTONE_API_KEY', 'inkstone-secret')
     with SessionDB(tmp_path / 'state.db') as db:
-        authority = SimpleNamespace(instance_id='i', epoch=1, profile_id='p', db=db)
+        authority = SimpleNamespace(instance_id='i', epoch=1, profile_id=str(tmp_path), db=db)
         runner = SimpleNamespace(session_authority=authority,
                                  _resolve_session_agent_runtime=lambda **k: (None, {}))
         authority.runner = runner
@@ -417,7 +417,7 @@ async def test_model_pick_freezes_legacy_custom_provider_for_the_next_runtime(tm
     monkeypatch.setattr(model_switch, 'switch_model', switch)
     monkeypatch.setenv('INKSTONE_API_KEY', 'inkstone-secret')
     with SessionDB(tmp_path / 'state.db') as db:
-        authority = SimpleNamespace(instance_id='i', epoch=1, profile_id='p', db=db)
+        authority = SimpleNamespace(instance_id='i', epoch=1, profile_id=str(tmp_path), db=db)
         runner = SimpleNamespace(session_authority=authority,
                                  _resolve_session_agent_runtime=lambda **k: (None, {}))
         authority.runner = runner
@@ -456,7 +456,7 @@ async def test_picked_legacy_custom_provider_survives_a_profile_reorder_on_cold_
         base_url='https://inkstone.example.invalid/v1', api_mode='chat_completions'))
     with SessionDB(tmp_path / 'state.db') as db:
         def owner():  # a fresh owner: no in-memory secrets, everything re-read from config.yaml
-            authority = SimpleNamespace(instance_id='i', epoch=1, profile_id='p', db=db)
+            authority = SimpleNamespace(instance_id='i', epoch=1, profile_id=str(tmp_path), db=db)
             authority.runner = SimpleNamespace(session_authority=authority,
                                                _resolve_session_agent_runtime=lambda **k: (None, {}))
             return authority
@@ -506,7 +506,7 @@ async def test_probe_rename_keep_url_key(tmp_path, monkeypatch):
         base_url='https://inkstone.example.invalid/v1', api_mode='chat_completions'))
     with SessionDB(tmp_path / 'state.db') as db:
         def owner():  # a fresh owner: no in-memory secrets, everything re-read from config.yaml
-            authority = SimpleNamespace(instance_id='i', epoch=1, profile_id='p', db=db)
+            authority = SimpleNamespace(instance_id='i', epoch=1, profile_id=str(tmp_path), db=db)
             authority.runner = SimpleNamespace(session_authority=authority,
                                                _resolve_session_agent_runtime=lambda **k: (None, {}))
             return authority
@@ -556,7 +556,7 @@ async def test_model_pick_resolves_the_profiles_current_entry_over_a_frozen_one(
     monkeypatch.setattr(model_switch, 'switch_model', switch)
     monkeypatch.setenv('CURRENT_KEY', 'current-secret')
     with SessionDB(tmp_path / 'state.db') as db:
-        authority = SimpleNamespace(instance_id='i', epoch=1, profile_id='p', db=db)
+        authority = SimpleNamespace(instance_id='i', epoch=1, profile_id=str(tmp_path), db=db)
         runner = SimpleNamespace(session_authority=authority,
                                  _resolve_session_agent_runtime=lambda **k: (None, {}))
         authority.runner = runner
@@ -594,7 +594,7 @@ async def test_committed_model_selection_is_the_next_resolved_runtime(tmp_path, 
     from hermes_cli import model_switch
     old_url, new_url = 'http://127.0.0.1:9/v1', 'http://127.0.0.2:9/v1'
     with SessionDB(tmp_path / 'state.db') as db:
-        authority = SimpleNamespace(instance_id='i', epoch=1, profile_id='p', db=db)
+        authority = SimpleNamespace(instance_id='i', epoch=1, profile_id=str(tmp_path), db=db)
         runner = SimpleNamespace(session_authority=authority,
                                  _resolve_session_agent_runtime=lambda **k: (None, {'api_key': 'sk-endpoint-a'}))
         authority.runner = runner

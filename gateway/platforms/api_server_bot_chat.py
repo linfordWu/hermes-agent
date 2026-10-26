@@ -136,7 +136,7 @@ async def admit_peer_turn(runner, session_id, message, author):
     tip = bot_chat_tip(authority, session_id)
     if tip is None:
         return None
-    home = Path(authority.db.db_path).parent.resolve()
+    home = await asyncio.to_thread(Path(authority.profile_id).resolve)
     from gateway.session_bot import displaceable_bot_chat
     if displaceable_bot_chat(authority, authority.db.get_session_by_title('Bot Chat') or tip) is not None:
         # The title is held by an API conversation no FIFO can own (#140769, MSG-21): the owner
