@@ -27,6 +27,34 @@ _PROBE_INITIALIZE_BODY = (  # JSON-RPC ``initialize`` body for the content-type 
     '{"jsonrpc":"2.0","id":"_probe","method":"initialize","params":{"protocolVersion":"2025-03-26",'
     '"capabilities":{},"clientInfo":{"name":"hermes-probe","version":"0.1"}}}')
 
+_MCP_TEARDOWN_TIMEOUT_SECONDS = 30.0
+
+
+class _BoundedAsyncExit:
+    """Keep a stalled SDK context-manager exit from blocking MCP reconnect forever."""
+
+    def __init__(self, context_manager, *, server_name: str, phase: str):
+        self._context_manager = context_manager
+        self._server_name = server_name
+        self._phase = phase
+
+    async def __aenter__(self):
+        return await self._context_manager.__aenter__()
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        timeout = asyncio.timeout(_MCP_TEARDOWN_TIMEOUT_SECONDS)
+        try:
+            async with timeout:
+                return await self._context_manager.__aexit__(exc_type, exc_value, traceback)
+        except TimeoutError:
+            if not timeout.expired():
+                raise
+            logger.warning(
+                "MCP server '%s': %s MCP teardown did not finish within %.0fs; abandoned so the server can reconnect",
+                self._server_name, self._phase, _MCP_TEARDOWN_TIMEOUT_SECONDS,
+            )
+            return False
+
 
 def _content_type_base(resp) -> str:
     """``content-type`` header of *resp* without parameters, lowercased."""
@@ -294,8 +322,9 @@ class MCPServerTransportMixin:
         """Open *transport_cm*, wrap its streams in a ClientSession and serve it. Streams are indexed,
         not unpacked (mcp 1.x yields a 3-tuple, 2.x a pair); a TaskGroup drop maps to ``"reconnect"``."""
         try:
-            async with transport_cm as _streams:
-                async with _core.ClientSession(_streams[0], _streams[1], **self._session_kwargs()) as session:
+            async with _BoundedAsyncExit(transport_cm, server_name=self.name, phase="transport") as _streams:
+                client_session = _core.ClientSession(_streams[0], _streams[1], **self._session_kwargs())
+                async with _BoundedAsyncExit(client_session, server_name=self.name, phase="client") as session:
                     return await self._serve_session(session, connect_timeout, label)
         except BaseExceptionGroup as _eg:
             return self._reconnect_or_reraise_group(_eg)
