@@ -797,10 +797,19 @@ def normalize_stream_usage(message_stream: Any) -> Any:
     return message_stream
 
 
+_STREAM_WORD = re.compile(r"(?<![\w-])stream(?:ing|s)?(?![\w-])")
+
+
+def _is_stream_unsupported_error(exc: Exception) -> bool:
+    """True only when an error explicitly says stream/streaming is unsupported."""
+    err_lower = str(exc).lower()
+    return bool(_STREAM_WORD.search(err_lower) and "not supported" in err_lower)
+
+
 def _is_stream_unavailable_error(exc: Exception) -> bool:
     """True when an Anthropic stream call should fall back to create()."""
     err_lower = str(exc).lower()
-    if "stream" in err_lower and "not supported" in err_lower:
+    if _is_stream_unsupported_error(exc):
         return True
     if "unexpected event order" in err_lower:
         return True
