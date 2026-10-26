@@ -409,12 +409,12 @@ def _compress_live_with_feedback(sid: str, session: dict, agent, arg: str, *, sn
         snapshot = {"approx_tokens": before_tokens, "before_messages": before_messages, "history_version": history_version}
         try:
             if snapshot_kwargs:
-                _compress_session_history(session, arg.strip() or None, **snapshot)
+                _compress_session_history(session, arg.strip() or None, agent=agent, **snapshot)
             else:
                 # The raw argument goes through unparsed: _compress_session_history (the choke point shared by
                 # all three manual-compress routes) parses the boundary-aware forms (here [N], up to here,
                 # --keep N) and does the partial head/tail split there (#35533).
-                _compress_session_history(session, arg)
+                _compress_session_history(session, arg, agent=agent)
         except CompressionLockHeld as e:
             return describe_compression_lock_skip(e.holder)
         _sync_session_key_after_compress(sid, session)
@@ -483,7 +483,7 @@ _SLASH_MIRRORS = {
         _apply_model_switch(sid, session, arg).get("warning", "") if arg and agent else ""),
     "approvals": _mirror_approvals, "personality": _mirror_personality,
     "compress": lambda sid, session, agent, arg: (
-        _compress_live_with_feedback(sid, session, agent, arg, snapshot_kwargs=False) if agent else ""),
+        _compress_live_with_feedback(sid, session, agent, arg, snapshot_kwargs=False) if agent else _NO_AGENT),
     "fast": _mirror_fast,
     "reload-mcp": _mirror_reload_mcp, "stop": _mirror_stop,
     "autoprune": _mirror_autoprune}

@@ -33,6 +33,11 @@ from agent.context_compressor_summary import _accepts_keyword_argument
 from agent.context_engine import automatic_compaction_status_message, sanitize_memory_context
 from agent.conversation_compression_codex import _compress_context_via_codex_app_server
 from agent.conversation_compression_deadline import resolve_context_compression_timeouts
+from agent.conversation_compression_notifications import (
+    _PENDING_CONTEXT_ENGINE_NOTIFICATION,
+    finalize_context_engine_compression_notification,
+    queue_context_engine_compression_notification,
+)
 from agent.conversation_compression_telemetry import (
     _emit_aborted_attempt_telemetry, _emit_blocked_attempt_telemetry, _emit_bypassed_attempt_telemetry,
     _emit_compression_attempt_telemetry, _record_committed_attempt_effect, _snapshot_compression_effect_input,
@@ -2460,9 +2465,6 @@ def _stamp_scoped_twins(targets: list, source: dict, *, exact_counts_stamped: bo
             target[_DB_PERSISTED_MARKER] = True
 
 
-_PENDING_CONTEXT_ENGINE_NOTIFICATION = "_pending_context_engine_compression_notification"
-
-
 def _hand_off_metrics_segment(old_session_id: str, new_session_id: str) -> None:
     """Shared metrics count one conversation across the rotation (a no-op when collection is off)."""
     with _swallow('shared-metrics segment hand-off failed', exc_info=True):
@@ -2498,25 +2500,10 @@ def _notify_context_engine_compression_complete(agent: Any, *, new_session_id: s
 
 
 def _queue_context_engine_compression_notification(agent: Any, *, new_session_id: str, old_session_id: str) -> None:
-    """Stage exactly one existing hook call for an outer host transaction."""
-    if callable(getattr(agent, _PENDING_CONTEXT_ENGINE_NOTIFICATION, None)):
-        raise RuntimeError("a compression notification is already pending")
-
-    def _notify() -> bool:
-        return _notify_context_engine_compression_complete(
-            agent, new_session_id=new_session_id, old_session_id=old_session_id
-        )
-
-    setattr(agent, _PENDING_CONTEXT_ENGINE_NOTIFICATION, _notify)
-
-
-def finalize_context_engine_compression_notification(agent: Any, *, committed: bool) -> bool:
-    """Emit or discard a deferred notification; repeated calls are no-ops."""
-    pending = getattr(agent, _PENDING_CONTEXT_ENGINE_NOTIFICATION, None)
-    setattr(agent, _PENDING_CONTEXT_ENGINE_NOTIFICATION, None)
-    if not committed or not callable(pending):
-        return False
-    return bool(pending())
+    """Stage the established compression hook for an outer host transaction."""
+    queue_context_engine_compression_notification(
+        agent, lambda: _notify_context_engine_compression_complete(
+            agent, new_session_id=new_session_id, old_session_id=old_session_id))
 
 
 class _CompactionLifecycle:
@@ -3390,12 +3377,13 @@ def _finish_compaction_boundary(
     # Plugin engines use boundary_reason="compression" to keep lineage/checkpoint
     # state. Fires in BOTH modes: in-place passes the same id, the boundary is real.
     if session_commit_succeeded and (bool(_old_sid) or compacted_in_place):
-        notify = (
-            _queue_context_engine_compression_notification
-            if defer_context_engine_notification
-            else _notify_context_engine_compression_complete
-        )
-        notify(agent, new_session_id=agent.session_id or "", old_session_id=_boundary_parent)
+        if defer_context_engine_notification:
+            _queue_context_engine_compression_notification(
+                agent, new_session_id=agent.session_id or "", old_session_id=_boundary_parent)
+        else:
+            _notify_context_engine_compression_complete(
+                agent, new_session_id=agent.session_id or "", old_session_id=_boundary_parent
+            )
 
     # Providers refresh cached per-session state; reset=False, conversation goes on.
     # Fires in BOTH modes so buffers don't double-count dropped turns in-place.

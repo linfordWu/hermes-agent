@@ -11376,9 +11376,7 @@ def test_session_compress_reports_aborted_summary_without_success(monkeypatch):
 
 def test_session_compress_syncs_session_key_after_rotation(monkeypatch):
     """LCM notification follows the TUI's final session-key transition."""
-    from agent.conversation_compression import (
-        _queue_context_engine_compression_notification,
-    )
+    from agent.conversation_compression_notifications import queue_context_engine_compression_notification
 
     events = []
     agent = types.SimpleNamespace(
@@ -11392,11 +11390,7 @@ def test_session_compress_syncs_session_key_after_rotation(monkeypatch):
     server._sessions["sid"]["pending_title"] = "stale title"
 
     def _compress(session, focus_topic=None, **_kw):
-        _queue_context_engine_compression_notification(
-            session["agent"],
-            new_session_id="rotated-id",
-            old_session_id="old-key",
-        )
+        queue_context_engine_compression_notification(session["agent"], lambda: events.append("notify") or True)
         return 2, {"total": 42}
 
     monkeypatch.setattr(server, "_compress_session_history", _compress)
@@ -11427,9 +11421,7 @@ def test_session_compress_syncs_session_key_after_rotation(monkeypatch):
 
 
 def test_session_compress_sync_failure_discards_lcm_notification(monkeypatch):
-    from agent.conversation_compression import (
-        _queue_context_engine_compression_notification,
-    )
+    from agent.conversation_compression_notifications import queue_context_engine_compression_notification
 
     events = []
     agent = types.SimpleNamespace(
@@ -11442,11 +11434,7 @@ def test_session_compress_sync_failure_discards_lcm_notification(monkeypatch):
     server._sessions["sid"]["session_key"] = "old-key"
 
     def _compress(session, focus_topic=None, **_kw):
-        _queue_context_engine_compression_notification(
-            session["agent"],
-            new_session_id="rotated-id",
-            old_session_id="old-key",
-        )
+        queue_context_engine_compression_notification(session["agent"], lambda: events.append("notify") or True)
         return 2, {"total": 42}
 
     monkeypatch.setattr(server, "_compress_session_history", _compress)

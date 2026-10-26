@@ -261,7 +261,7 @@ def _manual_compress_turn(sid: str, session: dict):
 
 def _compress_session_history(
     session: dict, focus_topic: str | None = None, approx_tokens: int | None = None,
-    before_messages: list | None = None, history_version: int | None = None,
+    before_messages: list | None = None, history_version: int | None = None, agent: Any = None,
 ) -> tuple[int, dict]:
     """Single choke point for all manual-compress routes. ``focus_topic`` is the RAW argument string after
     ``/compress``; the shared core (``agent.conversation_compression_manual``) parses boundary forms
@@ -270,7 +270,9 @@ def _compress_session_history(
     from agent.conversation_compression import finalize_context_engine_compression_notification
     from agent.conversation_compression_manual import (
         AGGRESSIVE_UNSUPPORTED, MIN_MESSAGES, compress_now, parse_compress_args)
-    agent = session["agent"]
+    agent = agent if agent is not None else session.get("agent")
+    if agent is None:
+        raise ValueError("No active agent -- send a message first.")
     # Snapshot under the lock so the LLM-bound compression call does NOT hold history_lock for the
     # request — otherwise prompt.submit etc. block on the dispatcher loop while compaction runs.
     if before_messages is None or history_version is None:

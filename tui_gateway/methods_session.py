@@ -2093,7 +2093,7 @@ def _compress_live(rid, sid: str, session: dict, focus_topic: str) -> dict:
                        f"⠋ compressing {before_count} messages (~{before_tokens:,} tok){focus_suffix}…")
     try:
         removed, usage = _compress_session_history(
-            session, focus_topic, approx_tokens=before_tokens, before_messages=before_messages,
+            session, focus_topic, approx_tokens=before_tokens, before_messages=before_messages, agent=_agent,
             history_version=history_version)
         with session["history_lock"]:
             messages = list(session.get("history", []))
