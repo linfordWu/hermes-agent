@@ -21,9 +21,10 @@ const ARCHIVED_FETCH_PAGE_SIZE = 500
  * received. The list endpoints deliberately back-fill pinned conversations
  * past their LIMIT (and the pin back-fill ignores the archived filter, so a
  * non-archived pin rides along on an archived page), which means a page can
- * return more rows than `limit`. Using the row count as the next offset would
- * skip archived rows that the back-fill displaced; the page size is the only
- * cursor the server's pagination contract guarantees.
+ * return more rows than `limit`. Those pins are pagination-only and are
+ * filtered out of the archived result. Using the row count as the next offset
+ * would skip archived rows that the back-fill displaced; the page size is
+ * the only cursor the server's pagination contract guarantees.
  *
  * Back-filled pins can repeat across pages (a pinned row past the window is
  * re-appended by every page whose window covers it), so rows dedupe by owner
@@ -47,15 +48,18 @@ export async function listEveryArchivedSession(): Promise<SessionInfo[]> {
     const archivedBefore = archivedCount
 
     for (const session of page.sessions) {
+      // The endpoint back-fills pinned sessions even when they are not
+      // archived. Keep them out of the pool rendered by the Archived view.
+      if (!session.archived) {
+        continue
+      }
+
       const identity = `${session.connection_id || ''}\0${session.profile || 'default'}\0${session.id}`
 
       if (!seen.has(identity)) {
         seen.add(identity)
         sessions.push(session)
-
-        if (session.archived) {
-          archivedCount += 1
-        }
+        archivedCount += 1
       }
     }
 

@@ -179,7 +179,7 @@ describe('listEveryArchivedSession', () => {
     const sessions = await listEveryArchivedSession()
 
     expect(sessions.filter(session => session.archived)).toHaveLength(PAGE_SIZE)
-    expect(sessions.filter(session => session.id === 'pin-x')).toHaveLength(1)
+    expect(sessions.filter(session => session.id === 'pin-x')).toHaveLength(0)
     expect(listAllProfileSessions).toHaveBeenCalledTimes(2)
   })
 
@@ -251,9 +251,9 @@ describe('listEveryArchivedSession', () => {
 
     const sessions = await listEveryArchivedSession()
 
-    // Every archived row plus the pin — none skipped, pin listed once.
-    expect(sessions).toHaveLength(2 * PAGE_SIZE + 2)
-    expect(sessions.filter(s => s.id === 'pin-x')).toHaveLength(1)
+    // Every archived row, with the back-filled pin kept out of the archive.
+    expect(sessions).toHaveLength(2 * PAGE_SIZE + 1)
+    expect(sessions.some(s => s.id === 'pin-x')).toBe(false)
     expect(sessions.filter(s => s.archived).map(s => s.id)).toContain(`a-${2 * PAGE_SIZE}`)
     expect(listAllProfileSessions).toHaveBeenNthCalledWith(2, PAGE_SIZE, 0, 'only', 'recent', 'all', {}, PAGE_SIZE)
     expect(listAllProfileSessions).toHaveBeenNthCalledWith(3, PAGE_SIZE, 0, 'only', 'recent', 'all', {}, 2 * PAGE_SIZE)
@@ -286,8 +286,21 @@ describe('listEveryArchivedSession', () => {
     // reached total.
     expect(calls).toBe(5)
     expect(sessions.filter(s => s.archived)).toHaveLength(total)
-    // The 100 distinct pins ride along once each, not once per page.
-    expect(sessions.filter(s => !s.archived)).toHaveLength(100)
+    expect(sessions.every(s => s.archived)).toBe(true)
+  })
+
+  it('does not let a back-filled pin hide its archived row on a later page', async () => {
+    listAllProfileSessions
+      .mockResolvedValueOnce({ sessions: [pinnedRow('same-id')], total: PAGE_SIZE + 1, limit: PAGE_SIZE, offset: 0 })
+      .mockResolvedValueOnce({
+        sessions: [row('same-id'), row('archived-after-pin')],
+        total: PAGE_SIZE + 1,
+        limit: PAGE_SIZE,
+        offset: PAGE_SIZE
+      })
+      .mockResolvedValueOnce({ sessions: [], total: PAGE_SIZE + 1, limit: PAGE_SIZE, offset: PAGE_SIZE * 2 })
+
+    await expect(listEveryArchivedSession()).resolves.toEqual([row('same-id'), row('archived-after-pin')])
   })
 
   it('reads a deep archive in backend-sized pages so the merge path re-reads its prefix fewer times', async () => {
