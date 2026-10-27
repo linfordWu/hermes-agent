@@ -1513,6 +1513,10 @@ class _CodexCompletionsAdapter:
                     resp_kwargs["include"] = ["reasoning.encrypted_content"]
                 elif "none" in supported and not is_xai:
                     resp_kwargs["reasoning"] = {"effort": "none"}
+        # Structured-output callers use the Chat Completions spelling, while this adapter
+        # sends Responses requests; keep this translation out of the compatibility facade.
+        from agent.auxiliary_response_formats import apply_codex_aux_response_format
+        apply_codex_aux_response_format(resp_kwargs, kwargs.get("response_format"), extra_body)
         if wire_tools:
             resp_kwargs["tools"] = wire_tools
         if wire_aliases:
@@ -1674,28 +1678,6 @@ class AsyncCodexAuxiliaryClient(_AsyncAuxiliaryClientBase):
     pass
 
 
-def _translate_anthropic_response_format(anthropic_kwargs: dict[str, Any], response_format: Any) -> None:
-    """Merge an OpenAI response format into Anthropic ``output_config``."""
-    if not isinstance(response_format, dict):
-        return
-    format_type = response_format.get("type")
-    if format_type == "json_schema":
-        json_schema = response_format.get("json_schema")
-        if not isinstance(json_schema, dict) or "schema" not in json_schema:
-            return
-        schema = json_schema["schema"]
-    elif format_type == "json_object":
-        # Anthropic SDK has no schema-less JSON mode; only ``json_schema``.
-        schema = {"type": "object"}
-    else:
-        return
-    output_config = anthropic_kwargs.get("output_config")
-    if not isinstance(output_config, dict):
-        output_config = {}
-        anthropic_kwargs["output_config"] = output_config
-    output_config["format"] = {"type": "json_schema", "schema": schema}
-
-
 class _AnthropicCompletionsAdapter:
     """OpenAI-client-compatible adapter for Anthropic Messages API."""
 
@@ -1716,6 +1698,7 @@ class _AnthropicCompletionsAdapter:
 
     def create(self, **kwargs) -> Any:
         from agent.anthropic_adapter import build_anthropic_kwargs, create_anthropic_message
+        from agent.auxiliary_response_formats import _translate_anthropic_response_format
         from agent.transports import get_transport
         model = kwargs.get("model", self._model)
         # ZAI's Anthropic endpoint rejects max_tokens on vision models (code 1210);
@@ -3384,9 +3367,9 @@ def _is_unsupported_parameter_error(exc: Exception, param: str) -> bool:
 
 
 def _is_structured_output_rejection(exc: Exception) -> bool:
-    """Provider 400/422 rejecting the structured-output field, on either wire: OpenAI ``response_format``
-    (incl. vLLM's ``guided_grammar``/xgrammar failures) or Anthropic ``output_config.format`` ("Extra inputs
-    are not permitted"). Callers tolerate an unconstrained reply, so the reaction is one retry without it."""
+    """Provider 400/422 rejecting structured output on either wire: OpenAI ``response_format`` or Responses
+    ``text.format`` (incl. vLLM's ``guided_grammar``/xgrammar failures), or Anthropic ``output_config.format``.
+    Callers tolerate an unconstrained reply, so the reaction is one retry without it."""
     status = getattr(exc, "status_code", None)
     if status is not None and status not in {400, 422}:
         return False
@@ -3395,16 +3378,16 @@ def _is_structured_output_rejection(exc: Exception) -> bool:
     if _contains_any(err_lower, ("guided_grammar", "xgrammar", "compile_grammar_error")):
         return True
     if "extra inputs are not permitted" in err_lower and (
-        "response_format" in err_lower or "output_config" in err_lower
+        "response_format" in err_lower or "text.format" in err_lower or "output_config" in err_lower
     ):
         return True
-    if "response_format" in err_lower and "unavailable" in err_lower:
+    if ("response_format" in err_lower or "text.format" in err_lower) and "unavailable" in err_lower:
         return True
     # Gateways that validate the request body with a strict pydantic model reject the
     # OBJECT-form json_schema by shape ("str type expected" on response_format.json_schema,
     # 422) rather than by naming the feature. The field is what they refuse; the retry
     # without it is the same remedy, so treat the shape error as a rejection too.
-    if "response_format" in err_lower and "json_schema" in err_lower:
+    if ("response_format" in err_lower or "text.format" in err_lower) and "json_schema" in err_lower:
         return True
     # Gemini native names its own generationConfig keys, never ours: "Function calling with a response
     # mime type: 'application/json' is unsupported" (pre-Gemini-3 + tools via a proxy), or an
@@ -3412,7 +3395,11 @@ def _is_structured_output_rejection(exc: Exception) -> bool:
     # surface cannot express. Same remedy: one retry without the format.
     if _contains_any(err_lower, ("response mime type", "response_schema", "response_json_schema")):
         return True
-    return _is_unsupported_parameter_error(exc, "response_format") or _is_unsupported_parameter_error(exc, "output_config")
+    return (
+        _is_unsupported_parameter_error(exc, "response_format")
+        or _is_unsupported_parameter_error(exc, "text.format")
+        or _is_unsupported_parameter_error(exc, "output_config")
+    )
 
 
 def _is_reasoning_field_rejection(exc: Exception) -> bool:

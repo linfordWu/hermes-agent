@@ -71,6 +71,8 @@ class TestIsStructuredOutputRejection:
         "HTTP 400: output_config: Extra inputs are not permitted",
         # Generic unsupported-parameter phrasings for both field names
         "Unsupported parameter: response_format",
+        "Unsupported parameter: text.format",
+        "HTTP 400: text.format: Extra inputs are not permitted",
         "output_config is not supported",
         # Strict pydantic gateway rejecting the object-form json_schema by SHAPE
         # (422, verbatim body from the gateway) -- no unsupported-parameter wording
