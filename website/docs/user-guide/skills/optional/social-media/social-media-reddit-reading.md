@@ -31,7 +31,7 @@ The following is the complete skill definition that Hermes loads when this skill
 
 # Reddit Reading Skill
 
-Reads Reddit content — subreddit listings, site or subreddit search, full threads with
+Reads Reddit content — subreddit listings, site or subreddit search, thread responses with
 comments, and user activity — from a server or headless machine where the normal routes
 are dead. It does not post, vote, or log in as a user. Idea credit: the per-platform
 backend routing in [Agent Reach](https://github.com/Panniantong/Agent-Reach).
@@ -52,8 +52,8 @@ Reddit's public Atom feeds (`.rss` endpoints), the only unauthenticated route Re
 serves to non-residential IPs. It is throttled to about one request per minute per IP and
 returns thinner data (no scores, top-level comments only), which is fine for a few calls.
 
-**Optional upgrade (app credentials, still no user login):** for sustained use or full
-data, register a free "script" type app at https://www.reddit.com/prefs/apps and put its
+**Optional upgrade (app credentials, still no user login):** for scores, nested comments or sustained
+access, register a free "script" type app at https://www.reddit.com/prefs/apps and put its
 two values in `~/.hermes/.env`:
 
 ```
@@ -76,16 +76,39 @@ missing or rejected it falls back to the anonymous feeds and says so on stderr.
 
 ## How to Run
 
-Run every command through `terminal` with the skill-relative script path:
+Run every command through `terminal` with the skill-relative script path. For machine
+reading and reports, use `--json` (before the subcommand) to retain coverage metadata;
+the default text renderer is a shorter display, not a coverage report:
 
 ```bash
 python3 scripts/reddit.py doctor                                  # which backend, current rate-limit window
-python3 scripts/reddit.py sub LocalLLaMA --sort hot --limit 15
-python3 scripts/reddit.py search "hermes agent" --sub LocalLLaMA --sort new
-python3 scripts/reddit.py thread https://www.reddit.com/r/x/comments/abc123/slug/ --limit 40
-python3 scripts/reddit.py user spez --limit 10
+python3 scripts/reddit.py --json sub LocalLLaMA --sort hot --limit 15
+python3 scripts/reddit.py --json search "hermes agent" --sub LocalLLaMA --sort new
+python3 scripts/reddit.py --json thread https://www.reddit.com/r/x/comments/abc123/slug/ --limit 40
+python3 scripts/reddit.py --json user spez --limit 10
 python3 scripts/reddit.py --json search "topic"                  # machine-readable
 ```
+
+For JSON results:
+
+- Posts and comments include integer `body_length` and `body_returned_length`, plus
+  boolean `body_truncated`. Lengths count Unicode characters in backend-provided text;
+  Atom measures HTML-stripped, normalized feed content. Bodies still stop at 4000
+  characters. `body_truncated=false` means no local slice, not verified original content.
+- Thread objects include `comments_coverage`. OAuth describes a `single_api_response`:
+  `available_in_response` counts parsed comments, `returned` counts emitted comments,
+  `omitted_by_limit` counts the local slice, and `more_nodes`/`skipped_nodes` count
+  unexpanded or unsupported nodes in the received tree, not missing comment totals.
+- OAuth `has_more=true` means omission/skip evidence, not a next-page promise. With no
+  such evidence it is `null` (unknown), never a completeness claim or `false`.
+  `full_thread_verified` remains `false`; `num_comments` does not certify coverage.
+- Atom describes a `single_feed_response`, with `has_more=null`,
+  `full_thread_verified=false`, `limit_is_advisory=true` and no scores or nesting.
+  It does not locally clip comments to the requested limit. Atom entries also include
+  `coverage` for the single normalized feed entry. OAuth does not have that entry field.
+- Empty listings remain `[]`; empty comment arrays do not prove a complete thread.
+  OAuth offers richer returned data, not guaranteed full bodies or all comments.
+  This reader does not paginate or expand `morechildren`.
 
 ## Quick Reference
 
@@ -110,8 +133,10 @@ minute per IP**; the script sleeps until the window resets on a 429 and retries 
 a five-call plan costs about five minutes. Prefer one `search --sub` over several `sub`
 listings, and read one thread rather than the whole listing.
 
-③ For "what is the community saying" questions, read the thread bodies (`thread`) rather
-than stopping at titles; the listing only carries the first ~300 characters of each post.
+③ For "what is the community saying" questions, read the thread bodies (`thread`)
+with `--json` rather than stopping at titles or the abbreviated text display. Check
+`body_truncated` on the post and comments, and `comments_coverage` before reporting
+what the discussion says. Describe only the returned sample, not the full community.
 
 ④ Cite the permalink (`url` field), not the listing page, when the result feeds a report.
 `grounded-citations` registers these URLs like any other source.

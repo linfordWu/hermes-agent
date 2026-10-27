@@ -110,6 +110,16 @@ def _api(path: str, token: str, **params):
     return json.loads(data)
 
 
+def _body_fields(text: str) -> dict:
+    """Lengths are Unicode characters in the backend-provided text, not bytes.
+
+    For Atom this is normalized feed content, not the original Reddit body.
+    """
+    body = text[:4000]
+    return {"body": body, "body_length": len(text),
+            "body_returned_length": len(body), "body_truncated": len(body) < len(text)}
+
+
 def _post_from_api(child: dict) -> dict:
     d = child["data"]
     return {
@@ -121,24 +131,28 @@ def _post_from_api(child: dict) -> dict:
         "created_utc": d.get("created_utc"),
         "url": f"{WWW}{d['permalink']}" if d.get("permalink") else d.get("url"),
         "external_url": None if d.get("is_self") else d.get("url"),
-        "body": (d.get("selftext") or "")[:4000],
+        **_body_fields(d.get("selftext") or ""),
     }
 
 
-def _flatten_comments(children: list, depth: int = 0, out: list | None = None) -> list:
+def _flatten_comments(children: list, depth: int = 0, out: list | None = None,
+                      coverage: dict | None = None) -> list:
     out = out if out is not None else []
     for c in children:
         if c.get("kind") != "t1":
+            if coverage is not None:
+                key = "more_nodes" if c.get("kind") == "more" else "skipped_nodes"
+                coverage[key] += 1
             continue
         d = c["data"]
         out.append({
             "author": d.get("author"), "score": d.get("score"), "depth": depth,
-            "created_utc": d.get("created_utc"), "body": (d.get("body") or "")[:4000],
+            "created_utc": d.get("created_utc"), **_body_fields(d.get("body") or ""),
             "url": f"{WWW}{d['permalink']}" if d.get("permalink") else None,
         })
         replies = d.get("replies")
         if isinstance(replies, dict):
-            _flatten_comments(replies["data"]["children"], depth + 1, out)
+            _flatten_comments(replies["data"]["children"], depth + 1, out, coverage)
     return out
 
 
@@ -150,7 +164,19 @@ def api_listing(token: str, path: str, limit: int, **params) -> list[dict]:
 def api_thread(token: str, sub: str, post_id: str, limit: int) -> dict:
     data = _api(f"/r/{sub}/comments/{post_id}", token, limit=limit, depth=10, sort="top")
     post = _post_from_api(data[0]["data"]["children"][0])
-    post["comments"] = _flatten_comments(data[1]["data"]["children"])[:limit]
+    coverage = {"backend": "oauth", "scope": "single_api_response",
+                "requested_limit": limit, "request_depth": 10, "sort": "top",
+                "more_nodes": 0, "skipped_nodes": 0}
+    comments = _flatten_comments(data[1]["data"]["children"], coverage=coverage)
+    post["comments"] = comments[:limit]
+    omitted = len(comments) - len(post["comments"])
+    coverage.update({"available_in_response": len(comments),
+                     "returned": len(post["comments"]), "omitted_by_limit": omitted,
+                     "limit_truncated": omitted > 0,
+                     # No marker is not proof that the whole thread was returned.
+                     "has_more": True if omitted or coverage["more_nodes"] or coverage["skipped_nodes"] else None,
+                     "full_thread_verified": False})
+    post["comments_coverage"] = coverage
     return post
 
 
@@ -167,7 +193,10 @@ def _entries(url: str) -> list[dict]:
             "author": (e.findtext("a:author/a:name", default="", namespaces=ATOM) or "").replace("/u/", "") or None,
             "created": e.findtext("a:updated", default="", namespaces=ATOM) or None,
             "url": link.get("href") if link is not None else None,
-            "body": strip_html(e.findtext("a:content", default="", namespaces=ATOM))[:4000],
+            **_body_fields(strip_html(e.findtext("a:content", default="", namespaces=ATOM))),
+            "coverage": {"backend": "anonymous-atom", "scope": "single_feed_entry",
+                         "full_content_verified": False,
+                         "scores_available": False, "nesting_available": False},
         })
     return out
 
@@ -182,9 +211,18 @@ def atom_thread(sub: str, post_id: str, limit: int) -> dict:
     if not entries:
         raise SystemExit("thread feed returned no entries")
     post, comments = entries[0], entries[1:]
-    post["comments"] = [{"author": c["author"], "created": c["created"], "body": c["body"], "url": c["url"]} for c in comments]
-    post["note"] = ("anonymous feed: scores and nesting unavailable; register a free Reddit script app and set "
-                    "REDDIT_CLIENT_ID/REDDIT_CLIENT_SECRET (no user login) for full data")
+    post["comments"] = [{k: c[k] for k in ("author", "created", "body", "url",
+                         "body_length", "body_returned_length", "body_truncated", "coverage")} for c in comments]
+    post["comments_coverage"] = {
+        "backend": "anonymous-atom", "scope": "single_feed_response",
+        "requested_limit": limit, "returned": len(comments),
+        "available_in_response": len(comments), "omitted_by_limit": 0,
+        "limit_truncated": False, "has_more": None, "full_thread_verified": False,
+        "limit_is_advisory": True, "scores_available": False, "nesting_available": False,
+    }
+    post["note"] = ("anonymous feed: partial feed only; scores and nesting unavailable; limit is advisory. "
+                    "Register a free Reddit script app and set REDDIT_CLIENT_ID/REDDIT_CLIENT_SECRET "
+                    "(no user login) for scores and nested comments, still limited to the returned API response")
     return post
 
 
