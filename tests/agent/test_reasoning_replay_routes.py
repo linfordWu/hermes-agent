@@ -44,6 +44,10 @@ def _wire(provider, base_url, model="m", rejected=()):
     ("novita", "https://api.novita.ai/openai/v1", "m", {"reasoning_content", "reasoning_details"}),
     ("ollama-cloud", "https://ollama.com/v1", "m", {"reasoning_content", "reasoning"}),
     ("custom", "http://127.0.0.1:8080/v1", "m", {"reasoning_content", "reasoning"}),
+    # NVIDIA treats ``reasoning`` as an alias for ``reasoning_content``; a custom provider
+    # pointed at NIM must not replay both spellings in the same assistant message.
+    ("custom", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3.5",
+     {"reasoning_content"}),
     # everyone else: the de-facto standard alias
     ("zai", "https://api.z.ai/api/paas/v4", "glm-5.3", {"reasoning_content"}),
     ("openai-api", "https://api.openai.com/v1", "gpt-5", {"reasoning_content"}),
@@ -64,6 +68,12 @@ def test_must_echo_pads_and_aliased_gemini_keeps_its_signature():
     assert bare["reasoning_content"] == " "  # DeepSeek 400s without it; "" is rejected too
     gemini_alias, _ = _wire("gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "my-alias")
     assert gemini_alias["tool_calls"][0]["extra_content"] == {"google": {"thought_signature": "sig"}}
+
+
+def test_custom_nvidia_deepseek_route_replays_one_reasoning_alias():
+    turn, _ = _wire("custom", "https://integrate.api.nvidia.com/v1", "deepseek-ai/deepseek-v4.1-flash")
+    assert turn["reasoning_content"] == "thought"
+    assert "reasoning" not in turn
 
 
 class _Rejection(Exception):

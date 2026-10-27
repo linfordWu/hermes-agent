@@ -666,6 +666,9 @@ _REASONING_CARRIER_ROUTES: tuple = (
     # OpenRouter-format gateways read the unified array, the string and the alias.
     (_ALL_CARRIERS, frozenset({"openrouter", "kilocode", "ai-gateway", "nous"}),
      ("openrouter.ai", "kilo.ai", "ai-gateway.vercel.sh", "nousresearch.com")),
+    # NVIDIA NIM treats ``reasoning`` as an alias of ``reasoning_content`` and rejects both
+    # fields together. This host rule must precede the generic custom/local carrier rule.
+    (frozenset({RC}), frozenset(), ("integrate.api.nvidia.com",)),
     # Vendors that document reasoning_details replay next to reasoning_content.
     (frozenset({RC, RD}), frozenset({"novita", "tencent-tokenhub", "minimax", "minimax-cn"}),
      ("novita.ai", "tokenhub.tencentmaas.com", "tokenhub-intl.tencentcloudmaas.com", "minimax.io", "minimaxi.com")),
