@@ -2752,56 +2752,12 @@ def cmd_console(args):
     return run_console_repl()
 
 
-# Top-level subcommands known WITHOUT plugin discovery (which costs 500ms+ of
-# eager plugin imports). Keep in sync with the add_parser calls in
-# _build_cli_parser: a missing entry only costs a one-time discovery; an extra
-# entry would let a plugin command silently fail to parse.
-_BUILTIN_SUBCOMMANDS = frozenset(
-    {
-        "acp", "approvals", "auth", "backup", "bundles", "checkpoints", "codex-runtime", "completion",
-        "computer-use", "connectors",
-        "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
-        "dump", "egress", "fallback", "gateway", "hooks", "import", "insights",
-        "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
-        "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
-        "project", "proxy",
-        "prompt-size",
-        "resume",
-        "send", "sessions", "setup",
-        "skin", "skills", "slack", "status", "tools", "uninstall", "update",
-        "usage", "vault",
-        "webhook", "whatsapp", "whatsapp-cloud", "worktree", "chat", "secrets", "security",
-        "browser",
-        "verify",
-        # Plugin commands missing from top-level --help is an accepted trade-off.
-        "help",
-    }
+from hermes_cli.plugin_cli_discovery import (
+    _BUILTIN_SUBCOMMANDS,
+    _first_positional_argv,
+    _plugin_cli_discovery_all_commands_needed,
+    _plugin_cli_discovery_needed,
 )
-
-
-def _first_positional_argv() -> str | None:
-    """First non-flag, non-flag-value token in ``sys.argv[1:]`` (skips values of known flags).
-
-    Not a full argparse simulation: an unknown ``--foo bar`` may classify
-    ``bar`` as positional, which at worst forces a one-time plugin discovery.
-    """
-    from hermes_cli._parser import command_argv
-
-    args = command_argv(sys.argv[1:])
-    return args[0] if args else None
-
-
-def _plugin_cli_discovery_needed() -> bool:
-    """True when the CLI might be invoking a plugin-registered subcommand.
-
-    False skips plugin discovery at argparse setup (~500-650ms). An unknown
-    first token could be a plugin command OR a chat prompt — either way
-    discovery is needed; for a prompt its cost amortizes over the agent run.
-    """
-    first = _first_positional_argv()  # None = bare ``hermes`` → chat
-    return first is not None and first not in _BUILTIN_SUBCOMMANDS
-
 
 def _resolve_deferred_platform_cli_command(command_name: str | None) -> None:
     """Materialize the deferred platform whose top-level CLI command matches.
@@ -3253,8 +3209,9 @@ def _attach_plugin_cli_command(subparsers, cmd_info) -> None:
 def _register_plugin_cli_commands(subparsers) -> None:
     """Register plugin-provided top-level commands (each plugin builds its own argparse tree).
 
-    Skipped when the invocation targets a known built-in — eagerly importing
-    every bundled plugin module costs 500-650ms.
+    Skipped for normal built-in invocations — eagerly importing every bundled
+    plugin module costs 500-650ms. Top-level help and completion opt in so they
+    can enumerate the complete command tree.
     """
     if not _plugin_cli_discovery_needed():
         return
@@ -3270,10 +3227,16 @@ def _register_plugin_cli_commands(subparsers) -> None:
             seen_plugin_commands.add(cmd_info["name"])
 
         discover_plugins()
-        # The invoked platform may still be a deferred entry; import it so its
-        # register_cli_command side effect runs before we read _cli_commands.
-        # See #54678.
-        _resolve_deferred_platform_cli_command(_first_positional_argv())
+        # The invoked platform may still be a deferred entry; introspection
+        # commands must resolve all of them to enumerate the complete tree.
+        # See #54678 and #145347.
+        if _plugin_cli_discovery_all_commands_needed():
+            from gateway.platform_registry import platform_registry
+
+            for command_name in platform_registry.pending_names():
+                _resolve_deferred_platform_cli_command(command_name)
+        else:
+            _resolve_deferred_platform_cli_command(_first_positional_argv())
         for cmd_info in get_plugin_manager()._cli_commands.values():
             if cmd_info["name"] not in seen_plugin_commands:
                 _attach_plugin_cli_command(subparsers, cmd_info)

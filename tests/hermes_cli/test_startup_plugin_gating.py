@@ -17,11 +17,24 @@ import sys
 from unittest.mock import patch
 
 from hermes_cli.main import (
+    _plugin_cli_discovery_needed,
     _resolve_deferred_platform_cli_command,
 )
 
 
 # ── _resolve_deferred_platform_cli_command (issue #54678) ──────────────────
+
+
+def test_plugin_commands_are_discovered_for_help_and_completion(monkeypatch):
+    """Introspection surfaces must use the same plugin-augmented parser as dispatch."""
+    for argv in (["hermes", "--help"], ["hermes", "completion", "bash"]):
+        monkeypatch.setattr(sys, "argv", argv)
+        assert _plugin_cli_discovery_needed(), argv
+
+
+def test_plugin_discovery_stays_lazy_for_other_builtin_commands(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["hermes", "logs"])
+    assert not _plugin_cli_discovery_needed()
 
 
 
