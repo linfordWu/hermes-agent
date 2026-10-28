@@ -22,11 +22,9 @@ from pathlib import Path
 from typing import Any, Callable, NamedTuple, Optional
 from hermes_dir_acl import make_user_dir
 
-from gateway.status_inline_source import (
-    command_line_runs_inline_source,
-    inline_bootstrap_argv,
-    inline_source_flag_index,
-)
+from gateway.status_inline_source import command_line_runs_inline_source, inline_bootstrap_argv
+from gateway.status_inline_source import inline_source_flag_index
+from gateway.status_command_identity import is_gateway_dedicated_entrypoint
 from hermes_constants import _get_platform_default_hermes_home, get_hermes_home, get_process_hermes_home
 from hermes_cli._subprocess_compat import pid_exists_stdlib
 from gateway.status_lock_dir import unusable_lock_dir, unusable_lock_dir_recovered
@@ -585,7 +583,7 @@ def _gateway_command_subcommand(command: str | None) -> str | None:
     # (e.g. the Discord bot-token lock). See #22418.
     if any(b == "desktop-gateway.py" for b in basenames):
         return "run"
-    if any(b in ("hermes-gateway", "hermes-gateway.exe") for b in basenames):
+    if is_gateway_dedicated_entrypoint(cased_tokens):
         return "run"
     joined = " ".join(tokens)
     if "hermes_cli.main" not in joined and "hermes_cli/main.py" not in joined and not any(

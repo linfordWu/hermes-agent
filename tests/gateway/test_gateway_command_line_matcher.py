@@ -27,6 +27,8 @@ ACCEPT = [
     "python gateway/run.py",
     "python -m gateway.run",   # module spelling of the dedicated entrypoint
     "hermes-gateway.exe",
+    "python3 /venv/bin/hermes-gateway",
+    "python3 -I -S -B -X utf8 /venv/bin/hermes-gateway",
     "hermes gateway",          # bare `hermes gateway` defaults to run
     "hermes gateway run",
     # profile selector AFTER the `gateway` token (argv is profile-position
@@ -50,6 +52,10 @@ REJECT = [
     "python -m hermes_cli.main gateway stop",
     "python -m hermes_cli.main --profile x dashboard",    # non-gateway subcommand
     "some random python -m mygateway thing",
+    "journalctl -u hermes-gateway",
+    "journalctl --user -u hermes-dashboard -u hermes-gateway -f -n 0 --no-pager -o short-iso",
+    "tail -f /var/log/hermes-gateway.log",
+    "systemctl status hermes-gateway",
     "",
     None,
 ]
@@ -164,5 +170,4 @@ ATOMIC_DESKTOP = (
 def test_accepts_atomic_desktop_gateway():
     assert matches(ATOMIC_DESKTOP) is True
     assert matches_runtime(ATOMIC_DESKTOP) is True
-
 
