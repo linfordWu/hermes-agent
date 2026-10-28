@@ -81,6 +81,28 @@ def test_restore_session_model_restores_model_and_provider():
     assert stub._explicit_base_url == "https://f/v1"
 
 
+def test_restore_anthropic_canonical_base_url_does_not_override_credential_pool(monkeypatch):
+    calls = []
+    resolved = {"api_key": "pooled-key", "base_url": "https://api.anthropic.com", "api_mode": "anthropic_messages",
+                "credential_pool": object()}
+    monkeypatch.setattr(
+        "hermes_cli.runtime_provider.resolve_runtime_provider",
+        lambda **kw: calls.append(kw) or resolved)
+    stub = _make_stub()
+
+    stub._restore_session_model(_row(
+        model="claude-opus-5-5",
+        model_config={"provider": "anthropic", "base_url": "https://api.anthropic.com"}))
+
+    assert stub.provider == "anthropic"
+    assert stub.base_url == "https://api.anthropic.com"
+    assert stub._explicit_api_key is None
+    assert stub._explicit_base_url is None
+    assert stub.api_key == "pooled-key"
+    assert stub._credential_pool is resolved["credential_pool"]
+    assert calls == [{"requested": "anthropic", "target_model": "claude-opus-5-5"}]
+
+
 def test_restore_llamacpp_session_follows_live_managed_endpoint(monkeypatch):
     """Managed llama.cpp owns its live port. A snapshot of last boot's loopback
     URL must not pin the resumed client to a dead ephemeral endpoint."""

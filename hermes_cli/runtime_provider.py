@@ -392,6 +392,14 @@ def is_foreign_provider_endpoint(provider: Optional[str], base_url: Optional[str
     return any(url == (other.inference_base_url or "").rstrip("/") for other in PROVIDER_REGISTRY.values())
 
 
+def is_canonical_provider_endpoint(provider: Optional[str], base_url: Optional[str]) -> bool:
+    """True when a saved URL is the provider's default endpoint rather than a user override."""
+    pconfig = PROVIDER_REGISTRY.get(str(provider or "").strip().lower())
+    url = str(base_url or "").strip().rstrip("/")
+    canonical = str(pconfig.inference_base_url or "").strip().rstrip("/") if pconfig else ""
+    return bool(url and canonical and url == canonical)
+
+
 def _anthropic_base_url_override_ok(base_url: str) -> bool:
     """Whether a configured ``model.base_url`` plausibly speaks the Anthropic Messages protocol:
     official Anthropic/Claude hosts, Azure Foundry, or ``/anthropic`` / Kimi ``/coding`` proxies

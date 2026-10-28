@@ -592,7 +592,10 @@ class CLIModelSwitchMixin:
             # _ensure_runtime_credentials for the restored one. api_key is never persisted to
             # the session DB — runtime provider resolution owns credentials.
             self._explicit_api_key = None
-            self._explicit_base_url = stored_base_url
+            # A persisted canonical URL is route metadata, not a user override. Marking it explicit
+            # sends resolution down the explicit-key rung before the pool (hiding pooled API keys).
+            from hermes_cli.runtime_provider import is_canonical_provider_endpoint
+            self._explicit_base_url = None if is_canonical_provider_endpoint(stored_provider, stored_base_url) else stored_base_url
             try:
                 from hermes_cli.runtime_provider import resolve_runtime_provider
                 resolved = resolve_runtime_provider(requested=stored_provider, target_model=self.model or None)
