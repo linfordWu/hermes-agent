@@ -1,6 +1,7 @@
 """Tests for the SSH remote execution environment backend."""
 
 import json
+import logging
 import os
 import shlex
 import subprocess
@@ -19,6 +20,7 @@ _SSH_HOST = os.getenv("HERMES_TEST_SSH_HOST", "")
 _SSH_USER = os.getenv("HERMES_TEST_SSH_USER", "")
 _SSH_PORT = int(os.getenv("HERMES_TEST_SSH_PORT", "22"))
 _SSH_KEY = os.getenv("HERMES_TEST_SSH_KEY", "")
+_REAL_POPEN = subprocess.Popen
 
 _has_ssh = bool(_SSH_HOST and _SSH_USER)
 
@@ -89,8 +91,8 @@ class TestBuildSSHCommand:
         captured = {}
 
         def _fake_popen(cmd, stdin_data=None, **kwargs):
-            captured["cmd"], captured["env"] = cmd, kwargs.get("env")
-            return MagicMock()
+            captured["cmd"], captured["env"], captured["kwargs"] = cmd, kwargs.get("env"), kwargs
+            return MagicMock(stderr=iter([]))
 
         monkeypatch.setattr(ssh_env, "_popen_bash", _fake_popen)
         env._run_bash(cmd)
@@ -126,6 +128,43 @@ class TestBuildSSHCommand:
         captured = self._capture_run_bash(monkeypatch, SSHEnvironment(host="h", user="u"))
         assert not any(a.startswith("SendEnv=") for a in captured["cmd"])
         assert captured["env"] is None
+
+    def test_run_bash_separates_ssh_client_diagnostics_from_remote_output(self, monkeypatch):
+        from tools import env_passthrough
+
+        monkeypatch.setattr(env_passthrough, "get_all_passthrough", lambda: frozenset())
+        captured = self._capture_run_bash(monkeypatch, SSHEnvironment(host="h", user="u"), "echo remote")
+
+        assert "exec 2>&1\necho remote" in captured["cmd"][-1]
+        assert captured["kwargs"]["stderr"] is subprocess.PIPE
+
+    def test_ssh_client_stderr_does_not_corrupt_remote_command_output(self, tmp_path, monkeypatch, caplog):
+        """A local ssh warning must not become the first token in parsed remote output."""
+        from tools import env_passthrough
+
+        caplog.set_level(logging.DEBUG, logger="tools.environments.ssh")
+        fake_ssh = tmp_path / "ssh"
+        fake_ssh.write_text(
+            "#!/bin/sh\n"
+            "printf 'Warning: local ssh diagnostic\\n' >&2\n"
+            "/bin/sh -c \"$*\"\n",
+            encoding="utf-8",
+        )
+        fake_ssh.chmod(0o755)
+        monkeypatch.setattr(env_passthrough, "get_all_passthrough", lambda: frozenset())
+        monkeypatch.setattr(ssh_env, "resolve_passthrough_env", lambda **_: ({}, set()))
+        monkeypatch.setattr(SSHEnvironment, "_build_ssh_command", lambda self, **_: [str(fake_ssh)])
+        monkeypatch.setattr(ssh_env.subprocess, "Popen", _REAL_POPEN)
+        env = SSHEnvironment.__new__(SSHEnvironment)
+        env.host, env.user, env.port, env.key_path = "host", "user", 22, ""
+
+        proc = env._run_bash("printf 'remote out\\n'; printf 'remote err\\n' >&2")
+        output = proc.stdout.read()
+        assert proc.wait(timeout=5) == 0
+        proc._hermes_ssh_stderr_thread.join(timeout=5)
+
+        assert output == "remote out\nremote err\n"
+        assert "local ssh diagnostic" in caplog.text
 
 
 class TestControlSocketPath:

@@ -253,10 +253,10 @@ def _popen_bash(cmd: list[str], stdin_data: str | None = None, **kwargs) -> subp
     asynchronously via :func:`_pipe_stdin`. Backends with special Popen needs (e.g. local's
     ``preexec_fn``) can bypass this and call :func:`_pipe_stdin` directly."""
     kwargs.setdefault("creationflags", windows_hide_flags())
+    kwargs.setdefault("stdout", subprocess.PIPE)
+    kwargs.setdefault("stderr", subprocess.STDOUT)
     proc = subprocess.Popen(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
         stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
         text=True, encoding="utf-8", errors="replace",
         **kwargs)

@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
+from agent.memory_provider import spawn_context_thread
 from tools.environments.base import BaseEnvironment, EnvironmentConnectionError
 from tools.environments.base_output import _popen_bash
 from tools.environments.file_sync import (
@@ -27,6 +28,16 @@ _SSH_MULTIPLEX = os.name != "nt"
 
 # Module-level binding: tests patch ``ssh._load_hermes_env_vars`` to fake the .env file.
 _load_hermes_env_vars = load_hermes_env_vars
+
+
+def _drain_ssh_client_stderr(stream) -> None:
+    """Log local ssh-client diagnostics separately from the remote command output."""
+    if stream is None:
+        return
+    for line in stream:
+        diagnostic = line.rstrip()
+        if diagnostic:
+            logger.warning("SSH client diagnostic: %s", diagnostic)
 
 
 def _ensure_ssh_available() -> None:
@@ -284,9 +295,22 @@ class SSHEnvironment(BaseEnvironment):
         remote sshd must ``AcceptEnv`` them (#14091). Profile-scoped names missing from the active
         scope are unset remotely so a shared host cannot serve another profile's value."""
         values, unset_names = resolve_passthrough_env(hermes_env_loader=_load_hermes_env_vars)
-        cmd = self._build_ssh_command(send_env=values) + bash_argv(shlex.quote(prepend_unset(cmd_string, unset_names)), login)
+        # Redirect the remote bash's stderr in its own shell. The ssh client's stderr
+        # also carries local diagnostics (for example a missing -i key warning), which
+        # must stay out of the command output parsed by file and image tools.
+        remote_script = f"exec 2>&1\n{prepend_unset(cmd_string, unset_names)}"
+        cmd = self._build_ssh_command(send_env=values) + bash_argv(shlex.quote(remote_script), login)
         client_env = client_env_with(values)
-        return _popen_bash(cmd, stdin_data, env=client_env) if client_env is not None else _popen_bash(cmd, stdin_data)
+        proc = (_popen_bash(cmd, stdin_data, env=client_env, stderr=subprocess.PIPE)
+                if client_env is not None else
+                _popen_bash(cmd, stdin_data, stderr=subprocess.PIPE))
+        # Keep draining the local ssh-client diagnostics so its pipe cannot fill and
+        # block command execution. They remain available in debug logs without being
+        # mixed into the remote command's stdout.
+        proc._hermes_ssh_stderr_thread = spawn_context_thread(
+            _drain_ssh_client_stderr, name="ssh-client-stderr", args=(proc.stderr,))
+        proc._hermes_ssh_stderr_thread.start()
+        return proc
 
     def cleanup(self):
         if self._sync_manager:
