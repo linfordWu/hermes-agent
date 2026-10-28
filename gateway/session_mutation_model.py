@@ -35,7 +35,7 @@ def _current_route(authority, live, old):
         try:
             model, runtime = authority.runner._resolve_session_agent_runtime(
                 source=live.source, session_key=live.route, fallback=False)
-        except AuthError:
+        except (AuthError, ValueError):
             return config, _Route(block.get('provider') or '', old.current_model(authority) or '',
                                   block.get('base_url') or '', '')
     return config, _Route(block.get('provider') or runtime.get('provider') or '', model or '',

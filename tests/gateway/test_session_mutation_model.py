@@ -13,6 +13,32 @@ import pytest
 from tests.gateway.fixtures.local_recovery_probe import Model, daemon, rpc, websocket
 
 
+def test_current_route_offline_managed_local_runtime_does_not_block_model_switch(monkeypatch):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from gateway.session_mutation_model import _current_route
+
+    config = {'model': {'provider': 'llamacpp', 'default': 'local-model'}}
+    old = SimpleNamespace(config=lambda _authority: config,
+                          current_model=lambda _authority: 'local-model')
+
+    def unavailable_runtime(**_kwargs):
+        raise ValueError("The local model server is turned off.")
+
+    authority = SimpleNamespace(runner=SimpleNamespace(_resolve_session_agent_runtime=unavailable_runtime))
+    live = SimpleNamespace(source='cli', route='session')
+    monkeypatch.setattr('gateway.session_policy.profile_read_scope', lambda *_args: nullcontext())
+
+    restored, route = _current_route(authority, live, old)
+
+    assert restored is config
+    assert route.provider == 'llamacpp'
+    assert route.model == 'local-model'
+    assert route.base_url == ''
+    assert route.api_key == ''
+
+
 class CatalogModel(Model):
     def do_GET(self):
         payload = json.dumps({'data': [{'id': name} for name in ('original', 'switched')]}).encode()
