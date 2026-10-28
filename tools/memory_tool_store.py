@@ -3,6 +3,7 @@ Entries are joined by ``ENTRY_DELIMITER``; budgets are in chars (model-independe
 Module state that tests monkeypatch (``get_memory_dir``, ``fcntl``/``msvcrt``) stays
 in ``tools.memory_tool`` and is read lazily."""
 
+import errno
 import itertools
 import logging
 import os
@@ -36,6 +37,11 @@ def _scan_memory_content(content: str) -> Optional[str]:
 # shared_metrics_contract.MEMORY_OP_FAILURE_CLASSES); never part of the result the model sees.
 FAILURE_CLASS: ContextVar[str] = ContextVar("memory_failure_class", default="other")
 _BACKUP_FAILED = " (BACKUP FAILED — file unchanged on disk)"
+_MEMORY_LOCK_TIMEOUT_SECONDS = 10.0
+
+
+class MemoryLockTimeout(TimeoutError):
+    """The memory store remained locked past the bounded wait."""
 
 
 def _error(message: str, failure_class: str, **extra) -> dict[str, Any]:
@@ -256,9 +262,8 @@ class MemoryStore:
 
     @staticmethod
     @contextmanager
-    def _file_lock(path: Path):
-        """Exclusive lock on a separate .lock file so the memory file itself can
-        still be atomically replaced."""
+    def _file_lock(path: Path, timeout: float = _MEMORY_LOCK_TIMEOUT_SECONDS):
+        """Acquire a bounded exclusive lock separate from the atomically replaced memory file."""
         from tools import memory_tool as _mt  # fcntl/msvcrt live (and are patched) there
         fcntl, msvcrt = _mt.fcntl, _mt.msvcrt
         lock_path = path.with_suffix(path.suffix + ".lock")
@@ -284,13 +289,31 @@ class MemoryStore:
             os.close(raw_fd)
             raise
         with fd:
-            def _flock(unlock: bool):
+            def _flock(unlock: bool, non_blocking: bool = False):
                 if fcntl:
-                    fcntl.flock(fd, fcntl.LOCK_UN if unlock else fcntl.LOCK_EX)
+                    operation = fcntl.LOCK_UN if unlock else fcntl.LOCK_EX
+                    if non_blocking:
+                        operation |= fcntl.LOCK_NB
+                    fcntl.flock(fd, operation)
                 else:
                     fd.seek(0)
-                    msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK if unlock else msvcrt.LK_LOCK, 1)
-            _flock(False)
+                    mode = msvcrt.LK_UNLCK if unlock else (msvcrt.LK_NBLCK if non_blocking else msvcrt.LK_LOCK)
+                    msvcrt.locking(fd.fileno(), mode, 1)
+            deadline = time.monotonic() + max(0.0, timeout)
+            delay = 0.01
+            while True:
+                try:
+                    _flock(False, non_blocking=True)
+                    break
+                except OSError as exc:
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                        raise
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise MemoryLockTimeout(
+                            f"{lock_path.name} remained locked for {max(0.0, timeout):.1f} seconds") from exc
+                    time.sleep(min(delay, remaining))
+                    delay = min(delay * 2, 0.25)
             try:
                 yield
             finally:
@@ -359,6 +382,15 @@ class MemoryStore:
         returns is passed through verbatim and nothing is persisted: error dicts, or the
         success payload of a read-only closure (``resolve_entry``, ``resolve_batch_entries``)."""
         path = self._path_for(target)
+        try:
+            return self._mutate_with_lock(path, target, mutate, skip_drift=skip_drift)
+        except MemoryLockTimeout as exc:
+            logger.warning("Memory write lock timed out for %s: %s", path, exc)
+            return _error(
+                f"Memory is locked by another agent; no operations were applied. Retry later. ({exc})",
+                "other")
+
+    def _mutate_with_lock(self, path: Path, target: str, mutate, *, skip_drift: bool = False):
         with self._file_lock(path):
             raw, read_ok = self._read_raw_checked(path)
             if not read_ok:

@@ -1,5 +1,6 @@
 """Tests for tools/memory_tool.py — MemoryStore, security scanning, and tool dispatcher."""
 
+import errno
 import json
 import os
 import stat
@@ -147,6 +148,33 @@ class TestMemoryFileLockPermissions:
                 pass
 
         assert outside.read_text(encoding="utf-8") == "do not touch"
+
+    def test_contended_memory_write_returns_retryable_error_without_writing(self, store, monkeypatch):
+        from tools import memory_tool
+
+        class ContendedFcntl:
+            LOCK_EX = 1
+            LOCK_NB = 4
+            LOCK_UN = 8
+
+            @classmethod
+            def flock(cls, _fd, operation):
+                if operation != cls.LOCK_UN:
+                    raise BlockingIOError(errno.EAGAIN, "lock is held")
+
+        monkeypatch.setattr(memory_tool, "fcntl", ContendedFcntl)
+        real_lock = MemoryStore._file_lock
+        monkeypatch.setattr(
+            MemoryStore, "_file_lock", staticmethod(lambda path: real_lock(path, timeout=0.0)))
+
+        path = store._path_for("memory")
+        assert not path.exists()
+        result = store.add("memory", "A durable fact")
+
+        assert result["success"] is False
+        assert "locked by another agent" in result["error"]
+        assert "no operations were applied" in result["error"]
+        assert not path.exists()
 
 
 class TestMemoryStoreAdd:
