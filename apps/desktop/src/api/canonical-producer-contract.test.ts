@@ -298,3 +298,54 @@ test.each(SITES)('%s: the canonical frame fits the generated contract', async (_
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
 })
+
+test('Move to project reuses the revision of a compressed conversation owner', async () => {
+  const wsPackage = 'ws'
+  const { WebSocketServer } = await import(wsPackage)
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const sent: any[] = []
+  server.on('connection', (socket: any) => {
+    socket.on('message', (bytes: Buffer) => {
+      const frame = JSON.parse(bytes.toString())
+      if (frame.method === 'client.capabilities') {
+        socket.send(JSON.stringify({ jsonrpc: '2.0', id: frame.id, result: { server_requests: [] } }))
+        return
+      }
+      sent.push(frame)
+      const result =
+        frame.method === 'session.resume'
+          ? {
+              ...SNAPSHOT,
+              session_id: 'logical-owner',
+              stored_session_id: 'logical-owner',
+              revision: 13,
+              execution_generation: 9
+            }
+          : { session_id: frame.params.session_id, revision: 14 }
+      socket.send(JSON.stringify({ jsonrpc: '2.0', id: frame.id, result }))
+    })
+  })
+  const client = new HermesGateway()
+
+  try {
+    const address = server.address() as { port: number }
+    await client.connect(`ws://127.0.0.1:${address.port}/api/ws?native_dial=fixture&ticket=one-use`)
+    await client.request('session.workspace.move', { session_key: 'compressed-tip', cwd: '/repo' })
+
+    expect(sent.filter(frame => frame.method === 'session.resume')).toHaveLength(1)
+    expect(sent.find(frame => frame.method === 'session.mutate')?.params).toMatchObject({
+      session_id: 'logical-owner',
+      operation: 'workspace',
+      expected_revision: 13,
+      expected_generation: 9,
+      payload: { cwd: '/repo' }
+    })
+  } finally {
+    client.close()
+    for (const socket of server.clients) {
+      socket.terminate()
+    }
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})

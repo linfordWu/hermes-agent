@@ -476,19 +476,22 @@ export class HermesGateway extends JsonRpcGatewayClient {
   // method that needs an authority subscription here.
   private async attachForRequest(method: string, params: Record<string, unknown>, deadline: number, signal?: AbortSignal): Promise<void> {
     const sid = typeof params.session_id === 'string' ? params.session_id : null
+    const isAttached = (sessionId: string) => this.attached.has(
+      canonicalSessionKey(this.protocol.sessionIdFor(sessionId, params.profile), params.profile)
+    )
 
     const resume = (sessionId: string) => this.request('session.resume', {
       session_id: sessionId, defer_history: true, omit_messages: true,
       ...(params.profile ? { profile: params.profile } : {})
     }, remainingRequestBudget(deadline, signal), signal)
 
-    if (sid && ATTACH_REQUIRED.has(method) && !this.attached.has(canonicalSessionKey(sid, params.profile))) {
+    if (sid && ATTACH_REQUIRED.has(method) && !isAttached(sid)) {
       await resume(sid)
     }
 
     const parent = PARENT_ATTACH_REQUIRED.has(method) ? params.parent_session_id ?? params.session_id ?? params.session_key : null
 
-    if (typeof parent === 'string' && parent && !this.attached.has(canonicalSessionKey(parent, params.profile))) {
+    if (typeof parent === 'string' && parent && !isAttached(parent)) {
       await resume(parent)
     }
   }

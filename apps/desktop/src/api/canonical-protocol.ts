@@ -248,6 +248,9 @@ const MUTATION_METHODS = new Set(['session.title', 'session.archive', 'session.c
 export class CanonicalDesktopProtocol {
   private creates = new Map<string, string>()
   private revisions = new Map<string, number>()
+  // A listed compressed segment can resume as its logical owner. Keep the wire row ID attached
+  // to that owner so session-key mutations use the revision returned by the resume snapshot.
+  private sessionAliases = new Map<string, string>()
   private mutations = new Map<string, Record<string, unknown>>()
   private generations = new Map<string, number>()
   private prompts = new Map<string, Record<string, unknown>>()
@@ -324,6 +327,7 @@ export class CanonicalDesktopProtocol {
   // retry after a lost reply re-presents the original target, never one re-derived from a transcript the
   // first attempt already rewound.
   private retainedMutation(sessionId: unknown, profile: unknown, operation: string, payload: Record<string, unknown>, withGeneration: boolean, derived = false): Record<string, unknown> {
+    sessionId = this.sessionIdFor(sessionId, profile)
     const owner = canonicalSessionKey(sessionId, profile)
     const key = JSON.stringify([owner, operation, derived ? null : payload])
     this.retireMutations(owner, key)
@@ -367,7 +371,12 @@ export class CanonicalDesktopProtocol {
 
   // A typed /undo or /retry whose reply was lost is still retained for its exact retry.
   private retainsDerivedRewind(sessionId: unknown, profile: unknown): boolean {
-    return this.mutations.has(JSON.stringify([canonicalSessionKey(sessionId, profile), 'rewind', null]))
+    return this.mutations.has(JSON.stringify([canonicalSessionKey(this.sessionIdFor(sessionId, profile), profile), 'rewind', null]))
+  }
+
+  sessionIdFor(sessionId: unknown, profile?: unknown): unknown {
+    if (typeof sessionId !== 'string') { return sessionId }
+    return this.sessionAliases.get(canonicalSessionKey(sessionId, profile)) ?? sessionId
   }
 
   // A request this protocol answers without the owner, or undefined. A replay-only /undo or /retry
@@ -635,6 +644,7 @@ export class CanonicalDesktopProtocol {
 
   result(method: string, params: Record<string, unknown>, value: any): any {
     if (!value || typeof value !== 'object') { return value }
+    this.rememberSessionAlias(method, params, value)
 
     const mutation = MUTATION_METHODS.has(method) || (POLICY_EDIT_METHODS.has(method) && typeof params.operation === 'string')
     this.adoptRevision(params, value, mutation)
@@ -654,6 +664,13 @@ export class CanonicalDesktopProtocol {
     }
 
     return value
+  }
+
+  private rememberSessionAlias(method: string, params: Record<string, unknown>, value: any): void {
+    if (method !== 'session.resume' || typeof params.session_id !== 'string' || typeof value.session_id !== 'string'
+      || params.session_id === value.session_id) { return }
+
+    this.sessionAliases.set(canonicalSessionKey(params.session_id, params.profile), value.session_id)
   }
 
   // An exact-retry mutation receipt replays its ORIGINAL revision; never move the CAS value backwards.
