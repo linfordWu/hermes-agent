@@ -106,6 +106,8 @@ export function useMicRecorder(copy: MicRecorderErrorCopy): {
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const audioContextRef = useRef<AudioContext | null>(null)
+  const meterSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const removeMeterListenersRef = useRef<(() => void) | null>(null)
   const pcmTapRef = useRef<ScriptProcessorNode | null>(null)
   const animationRef = useRef<number | null>(null)
   const startedAtRef = useRef(0)
@@ -115,7 +117,7 @@ export function useMicRecorder(copy: MicRecorderErrorCopy): {
   const silenceStartedAtRef = useRef<number | null>(null)
   const stopResolverRef = useRef<((recording: MicRecording | null) => void) | null>(null)
 
-  const cleanup = () => {
+  const cleanup = (disposeAudioContext = false) => {
     if (animationRef.current) {
       window.cancelAnimationFrame(animationRef.current)
       animationRef.current = null
@@ -123,11 +125,25 @@ export function useMicRecorder(copy: MicRecorderErrorCopy): {
 
     pcmTapRef.current?.disconnect()
     pcmTapRef.current = null
-    // Null the ref before closing so the context's own 'closed' statechange
-    // isn't mistaken for a meter failure.
+    meterSourceRef.current?.disconnect()
+    meterSourceRef.current = null
+    removeMeterListenersRef.current?.()
+    removeMeterListenersRef.current = null
+
     const audioContext = audioContextRef.current
-    audioContextRef.current = null
-    closeMeterContext(audioContext)
+
+    if (audioContext && (disposeAudioContext || meterFailedRef.current)) {
+      // Null the ref before closing so the context's own 'closed' statechange
+      // isn't mistaken for a meter failure.
+      audioContextRef.current = null
+      closeMeterContext(audioContext)
+    } else if (audioContext) {
+      // Reuse the context for the next take. Closing and reconstructing it on
+      // every recording can synchronously block Electron's renderer while the
+      // audio device is opened (notably on Windows; #146291).
+      audioContext.suspend().catch(() => undefined)
+    }
+
     streamRef.current?.getTracks().forEach(track => track.stop())
     streamRef.current = null
     recorderRef.current = null
@@ -136,7 +152,7 @@ export function useMicRecorder(copy: MicRecorderErrorCopy): {
     silenceTriggeredRef.current = false
   }
 
-  useEffect(() => () => cleanup(), [])
+  useEffect(() => () => cleanup(true), [])
 
   const startMeter = (stream: MediaStream, options: MicRecorderOptions) => {
     const audioWindow = window as Window & { webkitAudioContext?: BrowserAudioContext }
@@ -169,7 +185,13 @@ export function useMicRecorder(copy: MicRecorderErrorCopy): {
     }
 
     try {
-      const audioContext = new AudioContextCtor()
+      let audioContext = audioContextRef.current
+
+      if (!audioContext || audioContext.state === 'closed') {
+        audioContext = new AudioContextCtor()
+        audioContextRef.current = audioContext
+      }
+
       const analyser = audioContext.createAnalyser()
       const source = audioContext.createMediaStreamSource(stream)
 
@@ -177,7 +199,7 @@ export function useMicRecorder(copy: MicRecorderErrorCopy): {
       const data = new Uint8Array(analyser.fftSize)
 
       source.connect(analyser)
-      audioContextRef.current = audioContext
+      meterSourceRef.current = source
 
       if (options.onPcm) {
         startPcmTap(audioContext, source, options)
@@ -191,16 +213,26 @@ export function useMicRecorder(copy: MicRecorderErrorCopy): {
         }
       }
 
-      audioContext.addEventListener('error', failIfCurrent)
-      audioContext.addEventListener('statechange', () => {
+      const onError = () => failIfCurrent()
+
+      const onStateChange = () => {
         if (audioContext.state === 'closed') {
           failIfCurrent()
         }
-      })
-
-      if (audioContext.state === 'suspended') {
-        audioContext.resume().catch(failIfCurrent)
       }
+
+      audioContext.addEventListener('error', onError)
+      audioContext.addEventListener('statechange', onStateChange)
+
+      removeMeterListenersRef.current = () => {
+        audioContext.removeEventListener('error', onError)
+        audioContext.removeEventListener('statechange', onStateChange)
+      }
+
+      // Queue resume after the prior take's suspend without awaiting it. Web
+      // Audio applies state changes in order, and neither operation blocks
+      // the renderer event loop.
+      audioContext.resume().catch(failIfCurrent)
 
       const tick = () => {
         analyser.getByteTimeDomainData(data)

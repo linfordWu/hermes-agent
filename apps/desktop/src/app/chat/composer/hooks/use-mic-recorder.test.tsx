@@ -29,6 +29,7 @@ function deferred() {
 class FakeAudioContext extends EventTarget {
   static instances: FakeAudioContext[] = []
   static throwOnConstruct = false
+  static closeCalls = 0
   state: AudioContextState = 'running'
   closing = deferred()
 
@@ -47,12 +48,20 @@ class FakeAudioContext extends EventTarget {
   }
 
   createMediaStreamSource() {
-    return { connect: vi.fn() }
+    return { connect: vi.fn(), disconnect: vi.fn() }
   }
 
-  resume = vi.fn(async () => undefined)
+  resume = vi.fn(async () => {
+    this.state = 'running'
+  })
+
+  suspend = vi.fn(async () => {
+    this.state = 'suspended'
+  })
 
   close() {
+    FakeAudioContext.closeCalls += 1
+
     return this.closing.promise.then(() => {
       this.state = 'closed'
       this.dispatchEvent(new Event('statechange'))
@@ -84,6 +93,7 @@ const flush = () => act(async () => new Promise<void>(resolve => window.setTimeo
 beforeEach(() => {
   FakeAudioContext.instances = []
   FakeAudioContext.throwOnConstruct = false
+  FakeAudioContext.closeCalls = 0
   vi.stubGlobal('AudioContext', FakeAudioContext)
   vi.stubGlobal('MediaRecorder', FakeMediaRecorder)
   vi.stubGlobal(
@@ -104,7 +114,7 @@ afterEach(() => {
 })
 
 describe('useMicRecorder level meter', () => {
-  it('waits for the previous take’s meter to finish closing before opening the next', async () => {
+  it('reuses the meter context across takes and suspends it between recordings', async () => {
     const { result } = renderHook(() => useMicRecorder(copy))
 
     await act(async () => {
@@ -114,24 +124,36 @@ describe('useMicRecorder level meter', () => {
       await result.current.handle.stop()
     })
 
-    const first = FakeAudioContext.instances[0]
-    let secondStart: Promise<void> | undefined
+    const context = FakeAudioContext.instances[0]
+    await flush()
 
-    act(() => {
-      secondStart = result.current.handle.start()
+    expect(context.suspend).toHaveBeenCalledOnce()
+    expect(FakeAudioContext.closeCalls).toBe(0)
+
+    await act(async () => {
+      await result.current.handle.start()
     })
     await flush()
 
-    // Still closing: no second context on top of it.
     expect(FakeAudioContext.instances).toHaveLength(1)
+    expect(context.resume).toHaveBeenCalledTimes(2)
+    await act(async () => {
+      await result.current.handle.stop()
+    })
+    expect(context.suspend).toHaveBeenCalledTimes(2)
+  })
+
+  it('closes the reused meter context when the hook unmounts', async () => {
+    const { result, unmount } = renderHook(() => useMicRecorder(copy))
 
     await act(async () => {
-      first.closing.resolve()
-      await secondStart
+      await result.current.handle.start()
+      await result.current.handle.stop()
     })
 
-    expect(FakeAudioContext.instances).toHaveLength(2)
-    expect(first.state).toBe('closed')
+    unmount()
+
+    expect(FakeAudioContext.closeCalls).toBe(1)
   })
 
   it('reports a device error on the meter and marks the take meterFailed', async () => {
@@ -169,7 +191,7 @@ describe('useMicRecorder level meter', () => {
     expect(onMeterFailure).toHaveBeenCalledOnce()
   })
 
-  it('does not report its own close at the end of a take as a failure', async () => {
+  it('does not report suspending the meter after a take as a failure', async () => {
     const onMeterFailure = vi.fn()
     const { result } = renderHook(() => useMicRecorder(copy))
 
@@ -181,7 +203,6 @@ describe('useMicRecorder level meter', () => {
 
     await act(async () => {
       recording = await result.current.handle.stop()
-      FakeAudioContext.instances[0].closing.resolve()
     })
     await flush()
 
