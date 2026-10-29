@@ -234,7 +234,36 @@ def _resolve_route(route: dict[str, Any], parent_agent: Any, backend: str) -> Ta
     if route.get("profile"):
         return replace(_profile_route(_profile_home(route["profile"])), backend=backend)
     from tools.delegate_tool import _resolve_delegation_credentials  # the facade is the patch seam
-    creds = _resolve_delegation_credentials(route, parent_agent)
+    try:
+        creds = _resolve_delegation_credentials(route, parent_agent)
+    except ValueError as primary_error:
+        # A route's fallback chain normally handles failures after the child starts. A provider can
+        # also refuse before we can build that child (for example, an exhausted OAuth credential
+        # pool); in that case try the chain here so the route can still start on a healthy entry.
+        from hermes_cli.auth_constants import AuthError
+        from hermes_cli.fallback_config import get_fallback_chain
+        fallbacks = route.get("fallback_providers")
+        if not isinstance(primary_error.__cause__, AuthError) or not isinstance(fallbacks, list):
+            raise
+        fallbacks = get_fallback_chain({"fallback_providers": fallbacks})
+        for index, entry in enumerate(fallbacks):
+            fallback_route = {
+                **entry,
+                # Once an entry becomes primary, only later entries remain in the child's runtime
+                # fallback chain. Preserve entry-specific route fields such as reasoning_effort.
+                "fallback_providers": fallbacks[index + 1:],
+            }
+            try:
+                creds = _resolve_delegation_credentials(fallback_route, parent_agent)
+            except ValueError:
+                continue
+            if fallback_route.get("service_tier") not in (None, ""):
+                from tools.delegate_tool_tuning import task_service_tier
+                creds = {**creds, **task_service_tier(str(fallback_route["service_tier"]), creds, parent_agent)}
+            return TaskRoute(creds, fallback_route, fallback_route.get("reasoning_effort"), None, None, backend)
+        # Keep the original error: it describes the configured primary and is more useful than
+        # the last failed entry in a chain that could not be resolved.
+        raise primary_error
     if route.get("service_tier") not in (None, ""):
         from tools.delegate_tool_tuning import task_service_tier
         creds = {**creds, **task_service_tier(str(route["service_tier"]), creds, parent_agent)}
