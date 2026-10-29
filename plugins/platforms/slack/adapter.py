@@ -1993,7 +1993,7 @@ class SlackAdapter(BasePlatformAdapter):
         right bot token, and results are cached per (team, user) so repeated sends don't re-open. See
         #17261, #19236.
         """
-        cid = str(chat_id or "")
+        cid = str(chat_id or "").removeprefix("user:")
         if not cid or cid[0] not in ("U", "W"):
             return chat_id
         cache_key = f"{team_id or ''}:{cid}"
