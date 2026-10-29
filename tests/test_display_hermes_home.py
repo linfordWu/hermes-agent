@@ -46,6 +46,14 @@ class TestDisplayHermesHomePosix(unittest.TestCase):
             out = hc.display_hermes_home()
         self.assertEqual(out, str(outside))
 
+    def test_unavailable_user_home_falls_back_to_absolute(self):
+        """A cosmetic home-relative display must not break CLI startup."""
+        import hermes_constants as hc
+
+        home = Path("/custom/hermes-home")
+        with patch.object(Path, "home", side_effect=RuntimeError("home directory unavailable")):
+            self.assertEqual(hc.display_hermes_home(home), str(home))
+
     def test_no_serving_schema_carries_tilde_backslash_chimera(self):
         """Fleet guard: no served tool schema string may combine '~/' with
         a backslash — the class of bug, not the one site."""

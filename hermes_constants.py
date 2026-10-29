@@ -655,7 +655,7 @@ def display_hermes_home(home: Path | None = None) -> str:
         home = get_hermes_home()
     try:  # as_posix(): str() on Windows yields chimeras like ~/AppData\Local\hermes/skills/
         return "~/" + home.relative_to(Path.home()).as_posix()
-    except ValueError:
+    except (ValueError, RuntimeError):
         return str(home)
 
 
