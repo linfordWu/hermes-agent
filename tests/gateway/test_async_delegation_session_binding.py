@@ -48,6 +48,18 @@ class TestInterruptForSessionByParentId:
 class TestGatewayPinningFailsClosed:
     """The gateway must follow only verified compression continuations."""
 
+    def test_route_owner_falls_back_when_session_entry_has_no_origin(self):
+        from unittest.mock import MagicMock
+
+        from gateway.session_automation import _route_owner
+
+        authority = MagicMock()
+        authority.logical_owner.return_value = "logical-owner"
+        entry = self._entry("session-without-origin")
+
+        assert _route_owner(authority, entry) == "logical-owner"
+        authority.logical_owner.assert_called_once_with("session-without-origin")
+
     @staticmethod
     def _entry(session_id):
         from datetime import datetime
