@@ -283,6 +283,27 @@ async def test_fork_session_writes_branched_from_marker(adapter, session_db):
         cfg = json.loads(cfg)
     assert cfg["_branched_from"] == source_id
 
+
+@pytest.mark.asyncio
+async def test_forked_session_recency_uses_fork_time_not_copied_message_time(adapter, session_db):
+    """A new fork should appear as recent even when its copied transcript is old."""
+    source_id = session_db.create_session("old-source", "api_server")
+    old_message_timestamp = 1_700_000_000
+    session_db.append_message(
+        source_id, role="user", content="old message", timestamp=old_message_timestamp
+    )
+
+    app = _create_session_app(adapter)
+    async with TestClient(TestServer(app)) as cli:
+        fork_resp = await cli.post(f"/api/sessions/{source_id}/fork", json={"id": "recent-fork"})
+        assert fork_resp.status == 201
+        list_resp = await cli.get("/api/sessions?include_children=true")
+        assert list_resp.status == 200
+        sessions = (await list_resp.json())["data"]
+
+    fork = next(session for session in sessions if session["id"] == "recent-fork")
+    assert fork["last_active"] > old_message_timestamp
+
 @pytest.mark.asyncio
 async def test_run_agent_binds_api_session_context_for_tool_env(adapter, monkeypatch):
     """API-server request sessions should reach tools and terminal subprocess env."""
