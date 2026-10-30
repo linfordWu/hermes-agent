@@ -2152,9 +2152,19 @@ def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_s
         logger.debug("Job '%s': failed to set cron session title: %s", job_id, e)
         # Never leave the session untitled.
         # Try the next free title in the lineage, then a bare id-stamped title. See #50535.
-        for _fallback in (
-            getattr(_session_db, "get_next_title_in_lineage", lambda b: b)(f"cron {job_id}"),
-            f"cron {job_id} {_final_cron_session_id[-6:]}"):
+        _fallback_titles = []
+        try:
+            _fallback_titles.append(
+                getattr(_session_db, "get_next_title_in_lineage", lambda b: b)(f"cron {job_id}")
+            )
+        except (Exception, KeyboardInterrupt) as fallback_error:
+            # A prior bounded DB failure disables later proxy calls. Keep that
+            # best-effort lookup from aborting the rest of this finalizer.
+            logger.debug(
+                "Job '%s': failed to compute cron session title fallback: %s",
+                job_id, fallback_error)
+        _fallback_titles.append(f"cron {job_id} {_final_cron_session_id[-6:]}")
+        for _fallback in _fallback_titles:
             try:
                 if _set_cron_session_title(_session_db, _final_cron_session_id, _fallback):
                     break

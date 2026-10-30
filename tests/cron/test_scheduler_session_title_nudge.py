@@ -16,6 +16,51 @@ class TestSetCronSessionTitle:
         assert out == "Nightly Synthesis #2"
         db.get_next_title_in_lineage.assert_called_once_with("Nightly Synthesis")
 
+    def test_title_fallback_failure_does_not_abort_session_finalization(self, monkeypatch):
+        from cron import scheduler
+
+        class SessionDB:
+            def __init__(self):
+                self.end_reasons = []
+                self.titles = []
+
+            def get_compression_tip(self, _session_id):
+                return None
+
+            def set_session_title(self, _session_id, title):
+                self.titles.append(title)
+                raise TimeoutError("title write timed out")
+
+            def get_next_title_in_lineage(self, _title):
+                raise RuntimeError("session finalization disabled after prior cleanup failure")
+
+            def session_lifecycle_statuses(self, _session_ids):
+                return {}
+
+            def end_session(self, _session_id, reason):
+                self.end_reasons.append(reason)
+
+        db = SessionDB()
+        released = []
+
+        def run_inline(cleanup, **_kwargs):
+            try:
+                cleanup()
+            except (Exception, KeyboardInterrupt):
+                return False
+            return True
+
+        monkeypatch.setattr(scheduler, "_run_cron_cleanup_with_timeout", run_inline)
+        monkeypatch.setattr("hermes_state_registry.release_or_close", lambda _db: released.append(True))
+
+        scheduler._finalize_cron_session(db, None, "job-1", "Nightly", "session-123456")
+
+        # Both title attempts can fail, but that best-effort metadata must not
+        # prevent the durable end-session step (or the outer agent teardown).
+        assert db.titles[-1] == "cron job-1 123456"
+        assert db.end_reasons == ["cron_complete"]
+        assert released == [True]
+
 class TestFailureStreakNudge:
     """Poke-inspired repeated-failure review nudge (_failure_streak_nudge)."""
 
