@@ -101,24 +101,31 @@ def has_live_connection(path: Path | str) -> bool:
 class _TrackingMixin:
     """Untrack-on-close behaviour, mixable into any Connection subclass.
 
-    The real ``close()`` and the unregister happen together under ``_live_lock`` so a concurrent
-    probe can never observe "no live connection" while this descriptor is still open. Unregister
-    runs only after ``close()`` succeeds: untracking before a failing close (e.g. cross-thread
-    ProgrammingError) would leave the FD open while the byte-probe guard thinks nothing is live.
+    The connection remains registered until ``close()`` succeeds, including throughout a slow
+    or failing close. Serialize closes of this connection, not all databases: SQLite cleanup
+    may wait on its own mutex, and holding the registry lock there stalls unrelated opens and
+    probes. A raw probe still sees the live entry and is refused.
     """
 
     _hermes_tracked_path: str | None = None
 
     def close(self) -> None:  # type: ignore[misc]
         with _live_lock:
+            close_lock = getattr(self, "_hermes_close_lock", None)
+            if close_lock is None:
+                close_lock = self._hermes_close_lock = threading.RLock()
+        with close_lock:
             path = getattr(self, "_hermes_tracked_path", None)
             # Close first; untrack only once the descriptor is actually gone. Untracking before a failing
             # close (e.g. cross-thread ProgrammingError) leaves the FD open while the byte-probe guard
             # thinks nothing is live — see #75629.
             super().close()  # type: ignore[misc]
             if path is not None:
-                self._hermes_tracked_path = None
-                untrack_connection(path)
+                with _live_lock:
+                    self._hermes_tracked_path = None
+                    # This is the canonical key captured at open. Resolving it again can name a
+                    # different file after a path replacement and strand the original entry.
+                    _track_key(path, -1)
 
 
 class TrackedConnection(_TrackingMixin, sqlite3.Connection):
