@@ -8,6 +8,7 @@ late-bound via ``_kb`` (import-cycle breaking) so monkeypatching
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import signal
@@ -527,16 +528,49 @@ def reap_terminal_workers(conn: sqlite3.Connection, *, signal_fn=None) -> list[s
 
 
 def _reap_terminal_worker_row(conn, row, host_prefix: str, signal_fn, reaped: list[str]) -> None:
-    pid, fingerprint = int(row["worker_pid"]), row["worker_started_at"]
-    if pid == os.getpid() or not str(row["claim_lock"] or "").startswith(host_prefix):
+    spawn_pid, spawn_fingerprint = int(row["worker_pid"]), row["worker_started_at"]
+    claim_lock = row["claim_lock"]
+    if spawn_pid == os.getpid() or not str(claim_lock or "").startswith(host_prefix):
         return
-    if fingerprint == UNVERIFIED_WORKER_FINGERPRINT and _kb._pid_alive(pid):
+    if spawn_fingerprint == UNVERIFIED_WORKER_FINGERPRINT and _kb._pid_alive(spawn_pid):
         return  # unproven identity: never signalled; its evidence is cleared once the pid is gone
-    alive = _worker_alive(pid, fingerprint)
-    termination = None
-    if alive:
+    # The dispatcher records the spawned submitter, but that process can be only a
+    # wrapper around the interpreter that actually owns the worker. Prefer the
+    # run-scoped worker_bound identity so a wrapper exit cannot be mistaken for
+    # terminating the work itself. Keep both identities as targets: stopping the
+    # bound worker can leave its wrapper waiting, while stopping the wrapper alone
+    # can leave the bound worker orphaned.
+    bound_target = None
+    bound = conn.execute(
+        "SELECT payload FROM task_events WHERE task_id=? AND run_id=? AND kind='worker_bound' "
+        "ORDER BY id DESC LIMIT 1",
+        (row["task_id"], row["id"]),
+    ).fetchone()
+    if bound:
+        try:
+            payload = json.loads(bound["payload"])
+        except (TypeError, ValueError):
+            payload = {}
+        bound_pid, bound_fingerprint = payload.get("pid"), payload.get("started_at")
+        if (payload.get("claim_lock") == claim_lock and isinstance(bound_pid, int)
+                and bound_pid > 0 and isinstance(bound_fingerprint, str) and bound_pid != spawn_pid):
+            bound_target = (bound_pid, bound_fingerprint)
+    targets = ([bound_target] if bound_target else []) + [(spawn_pid, spawn_fingerprint)]
+
+    terminations = []
+    attempted = False
+    for pid, fingerprint in targets:
+        if pid == os.getpid():
+            return
+        if fingerprint == UNVERIFIED_WORKER_FINGERPRINT and _kb._pid_alive(pid):
+            return  # unproven identity: never signal a live process by bare PID
+        if not _worker_alive(pid, fingerprint):
+            terminations.append({"pid": pid, "terminated": True, "already_gone": True})
+            continue
         termination = _terminate_reclaimed_worker(
-            pid, row["claim_lock"], signal_fn=signal_fn, started_at=fingerprint)
+            pid, claim_lock, signal_fn=signal_fn, started_at=fingerprint)
+        terminations.append({"pid": pid, **termination})
+        attempted = True
         if not termination["terminated"]:
             return  # still alive: try again next tick
     with _kb.write_txn(conn):
@@ -545,12 +579,20 @@ def _reap_terminal_worker_row(conn, row, host_prefix: str, signal_fn, reaped: li
             "WHERE id = ? AND worker_pid = ? AND worker_started_at = ?",
             (row["id"], pid, fingerprint),
         )
-        if alive:
+        if attempted:
+            primary = next((item for item in terminations if not item.get("already_gone")), terminations[0])
+            primary_fingerprint = next(fingerprint for target_pid, fingerprint in targets if target_pid == primary["pid"])
             _kb._append_event(
-                conn, row["task_id"], "terminal_worker_reaped",
-                {"pid": pid, "worker_started_at": fingerprint, **termination}, run_id=row["id"],
+                conn, row["task_id"], "terminal_worker_reaped", {
+                    **primary,
+                    "worker_started_at": primary_fingerprint,
+                    "spawn_pid": spawn_pid,
+                    "bound_pid": bound_target[0] if bound_target else None,
+                    "terminated": all(item["terminated"] for item in terminations),
+                    "termination_attempts": terminations,
+                }, run_id=row["id"],
             )
-    if alive:
+    if attempted:
         reaped.append(row["task_id"])
 
 

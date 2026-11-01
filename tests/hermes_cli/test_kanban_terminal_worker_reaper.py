@@ -11,6 +11,7 @@ the next tick — never a recycled PID, never a legacy row without a fingerprint
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -77,6 +78,56 @@ def test_worker_alive_after_completion_is_reaped_on_dispatch_tick(conn):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+def test_bound_interpreter_and_spawn_wrapper_are_both_reaped(conn):
+    """The recorded spawn PID can be a wrapper, not the interpreter doing the work (#147488)."""
+    spawned, bound = _sleeper(), _sleeper()
+    try:
+        tid = kb.create_task(conn, title="finished", assignee="coder")
+        kb.claim_task(conn, tid, claimer=kb._claimer_id())
+        task = kb.get_task(conn, tid)
+        run_id = task.current_run_id
+        kbd._set_worker_pid(conn, tid, spawned.pid, run_id=run_id, claim_lock=task.claim_lock)
+        bound_fingerprint = kbd._process_fingerprint(bound.pid)
+        assert bound_fingerprint
+        kb._append_event(conn, tid, "worker_bound", {
+            "pid": bound.pid, "started_at": bound_fingerprint, "claim_lock": task.claim_lock,
+        }, run_id=run_id)
+        assert kb.complete_task(conn, tid, result="done", expected_run_id=run_id) is True
+        conn.execute("UPDATE task_runs SET ended_at = ended_at - 600 WHERE id=?", (run_id,))
+        run = conn.execute("SELECT worker_pid, worker_started_at, ended_at FROM task_runs WHERE id=?", (run_id,)).fetchone()
+        assert run["worker_pid"] == spawned.pid and run["worker_started_at"] and run["ended_at"]
+
+        signalled = []
+
+        def signal_fn(pid, sig):
+            signalled.append(pid)
+            os.kill(pid, sig)
+
+        assert kbd._worker_alive(spawned.pid, run["worker_started_at"])
+        assert kbd._worker_alive(bound.pid, bound_fingerprint)
+        assert kbd.reap_terminal_workers(conn, signal_fn=signal_fn) == [tid]
+        assert set(signalled) == {spawned.pid, bound.pid}
+        assert spawned.wait(timeout=10) is not None
+        assert bound.wait(timeout=10) is not None
+        event = conn.execute(
+            "SELECT payload FROM task_events WHERE task_id=? AND run_id=? "
+            "AND kind='terminal_worker_reaped' ORDER BY id DESC LIMIT 1", (tid, run_id),
+        ).fetchone()
+        payload = json.loads(event["payload"])
+        assert payload["bound_pid"] == bound.pid
+        assert payload["pid"] == bound.pid
+        assert payload["termination_attempted"] is True
+        assert payload["terminated"] is True
+        assert all(attempt["terminated"] for attempt in payload["termination_attempts"])
+        run = conn.execute("SELECT worker_pid, worker_started_at FROM task_runs WHERE id=?", (run_id,)).fetchone()
+        assert run["worker_pid"] is None and run["worker_started_at"] is None
+    finally:
+        for proc in (spawned, bound):
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
 
 
 def test_recycled_pid_and_legacy_row_are_never_signalled(conn):
