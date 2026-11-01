@@ -212,12 +212,22 @@ def _dir_listing_items(root: str, word: str, path_part: str, prefix_tag: str, is
         if prefix_tag and (prefix_tag == "folder") != is_dir:  # explicit `@folder:`/`@file:` skip the other kind
             continue
         full = pth.join(search_dir, entry)
-        rel = pth.relpath(full, root).replace(os.sep, "/")
+        try:
+            rel = pth.relpath(full, root).replace(os.sep, "/")
+        except ValueError:
+            # Windows device paths (for example ``\\.\nul``) can live on a different mount
+            # from the project root. Skip that entry instead of failing the whole popup.
+            continue
         suffix = "/" if is_dir else ""
         if is_context:
             text = f"@{prefix_tag or ('folder' if is_dir else 'file')}:{rel}{suffix}"
         elif word.startswith("~"):
-            text = "~/" + pth.relpath(full, os.path.expanduser("~") if local else "~") + suffix
+            try:
+                home_rel = pth.relpath(full, os.path.expanduser("~") if local else "~")
+            except ValueError:
+                # The path may be relative to the project root but on another drive than HOME.
+                continue
+            text = "~/" + home_rel + suffix
         else:
             text = ("./" if word.startswith("./") else "") + rel + suffix
         items.append(_item(text, "dir" if is_dir else "", entry + suffix))

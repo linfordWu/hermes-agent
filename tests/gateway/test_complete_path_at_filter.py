@@ -82,6 +82,51 @@ def test_at_file_colon_only_files(tmp_path, monkeypatch):
     assert not any(t == "@file:docs/" for t in texts)
 
 
+@pytest.mark.parametrize(
+    ("root", "word", "path_part", "home"),
+    [
+        ("C:\\repo", "@file:\\\\.\\", "\\\\.\\", "C:\\Users\\test"),
+        ("D:\\repo", "~", "D:\\repo\\src\\", "C:\\Users\\test"),
+    ],
+)
+def test_path_completion_skips_entries_on_another_windows_mount(
+    monkeypatch, root, word, path_part, home,
+):
+    """A device namespace or a different home drive must not abort all completions."""
+    from types import SimpleNamespace
+
+    import ntpath
+
+    class WindowsPath:
+        sep = ntpath.sep
+
+        def __getattr__(self, name):
+            return getattr(ntpath, name)
+
+        @staticmethod
+        def isdir(path):
+            return not path.lower().endswith(("nul", "file.txt"))
+
+    path_module = WindowsPath()
+    path_module.expanduser = lambda _path: home
+    fake_os = SimpleNamespace(
+        path=path_module,
+        sep=ntpath.sep,
+        listdir=lambda _path: ["nul"] if path_part.startswith("\\\\.\\") else ["file.txt"],
+        expanduser=lambda _path: home,
+    )
+    monkeypatch.setattr(server, "os", fake_os)
+    monkeypatch.setattr(server, "_normalize_completion_path", lambda value: value)
+
+    items = server._dir_listing_items(
+        root, word, path_part, "file" if word.startswith("@file:") else "",
+        word.startswith("@file:"),
+        local=True,
+    )
+
+    assert items == []
+
+
 # ── Non-local terminal backend: the popup must show the backend's tree ──
 
 
@@ -356,5 +401,3 @@ def test_completion_ignores_real_terminal_cwd(tmp_path, monkeypatch):
         f"_completion_cwd resolved to {resolved} instead of {tmp_path} — "
         f"the autouse fixture may not be patching _launch_configured_cwd"
     )
-
-
