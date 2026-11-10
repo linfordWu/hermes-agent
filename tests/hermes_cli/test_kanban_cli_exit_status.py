@@ -58,3 +58,17 @@ def test_delegated_child_kanban_cli_refusal_returns_nonzero_exit_status(tmp_path
 
     assert refused.returncode == 1
     assert "delegate_task" in refused.stderr
+
+
+def test_delegated_child_can_list_kanban_tasks(tmp_path):
+    """Listing is read-only and must not run the readiness write on a fenced board."""
+    home = tmp_path / "hermes"
+    home.mkdir()
+
+    created = _run_hermes(home, "kanban", "create", "visible task", "--json")
+    assert created.returncode == 0, created.stderr
+
+    listed = _run_hermes(home, "kanban", "list", "--json", marker=True)
+
+    assert listed.returncode == 0, listed.stderr
+    assert json.loads(listed.stdout)[0]["title"] == "visible task"
