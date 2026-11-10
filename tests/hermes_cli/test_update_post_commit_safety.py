@@ -305,7 +305,7 @@ _ZIP_PARENT = textwrap.dedent('''
     hermes_main._run_pre_update_backup = lambda args: None
     token = {"resume_needed": True, "profiles": {}, "unmapped": [], "services": ["HermesGatewayProbe"],
              "service_profiles": {"HermesGatewayProbe": "probe"}}
-    hermes_main._pause_windows_gateways_for_update = lambda: token
+    hermes_main._pause_windows_gateways_for_update = lambda **_kwargs: token
     def scm(resume_token):
         with calls.open("a") as handle:
             handle.write(json.dumps(bool(resume_token and resume_token.get("resume_needed"))) + "\\n")

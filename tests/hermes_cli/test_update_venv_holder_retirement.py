@@ -74,6 +74,68 @@ def test_gateway_ancestor_refusal_never_kills_unknown_ancestry(monkeypatch, gate
     forbidden.assert_not_called()
 
 
+def test_detached_gateway_mode_skips_positive_ancestor_refusal_probe(monkeypatch):
+    from hermes_cli import gateway
+
+    probe = Mock(return_value=True)
+    monkeypatch.setattr(gateway, "_is_pid_ancestor_of_current_process", probe)
+
+    assert update_cmd._refuse_gateway_ancestor_tree_kill([123], gateway_mode=True) is False
+    probe.assert_not_called()
+
+
+def test_windows_update_refuses_to_tree_kill_its_gateway_ancestor(monkeypatch):
+    import gateway.status
+
+    refused = Mock(return_value=True)
+    terminate = Mock()
+    monkeypatch.setattr(update_cmd_windows, "_request_socket_pauses", lambda *args, **kwargs: ({}, [], []))
+    monkeypatch.setattr(update_cmd_windows, "_gateway_drain_timeout", lambda _acks: 0)
+    monkeypatch.setattr(main, "_wait_for_windows_update_gateway_exit", lambda *_args, **_kwargs: {123})
+    monkeypatch.setattr(update_cmd_windows, "_refuse_gateway_ancestor_tree_kill", refused)
+    monkeypatch.setattr(gateway.status, "terminate_pid", terminate)
+
+    with pytest.raises(RuntimeError, match="gateway would terminate its updater"):
+        update_cmd_windows._stop_windows_gateways([123], {}, set(), [], [], gateway_mode=False)
+
+    refused.assert_called_once_with([123], gateway_mode=False)
+    terminate.assert_not_called()
+
+
+def test_detached_gateway_update_exempts_ancestor_guard(monkeypatch):
+    import gateway.status
+
+    checked = []
+    terminate = Mock()
+    monkeypatch.setattr(update_cmd_windows, "_request_socket_pauses", lambda *args, **kwargs: ({}, [], []))
+    monkeypatch.setattr(update_cmd_windows, "_gateway_drain_timeout", lambda _acks: 0)
+    monkeypatch.setattr(main, "_wait_for_windows_update_gateway_exit", lambda *_args, **_kwargs: {123})
+    monkeypatch.setattr(
+        update_cmd_windows, "_refuse_gateway_ancestor_tree_kill",
+        lambda pids, *, gateway_mode: checked.append((pids, gateway_mode)) or False,
+    )
+    monkeypatch.setattr(gateway.status, "terminate_pid", terminate)
+
+    update_cmd_windows._stop_windows_gateways([123], {}, set(), [], [], gateway_mode=True)
+
+    assert checked == [([123], True)]
+    terminate.assert_called_once_with(123, force=True, expected_start_time=None)
+
+
+def test_gateway_update_passes_detached_mode_to_windows_pause(monkeypatch):
+    token = {"resume_needed": True}
+    received = []
+    monkeypatch.setattr(
+        main, "_pause_windows_gateways_for_update",
+        lambda *, gateway_mode=False: received.append(gateway_mode) or token,
+    )
+
+    result = update_cmd._pause_gateways_for_update(SimpleNamespace(no_gateway_restart=False), gateway_mode=True)
+
+    assert result is token
+    assert received == [True]
+
+
 def test_command_reaches_checkout_preparation_without_holder_gates(monkeypatch, tmp_path):
     from hermes_cli import update_inventory
 
@@ -109,4 +171,3 @@ def test_command_reaches_checkout_preparation_without_holder_gates(monkeypatch, 
         main.cmd_update(SimpleNamespace(gateway=False, check=False, yes=True, force=False, force_venv=False))
     assert reached == ["backup", "pause", "checkout"]
     forbidden.assert_not_called()
-

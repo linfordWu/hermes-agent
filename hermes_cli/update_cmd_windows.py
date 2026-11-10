@@ -930,7 +930,7 @@ def _gateway_drain_timeout(socket_acks: list[dict]) -> float:
     return drain_timeout
 
 
-def _pause_windows_gateways_for_update() -> dict | None:
+def _pause_windows_gateways_for_update(*, gateway_mode: bool = False) -> dict | None:
     """Stop running Windows gateways before mutating the checkout or venv.
 
     Scheduled/startup gateways run via pythonw.exe, invisible to the hermes.exe instance guard, yet keep files
@@ -986,7 +986,8 @@ def _pause_windows_gateways_for_update() -> dict | None:
         pause_record.mark_stop_requested(
             intended, running_pids, markers=_planned_stop_markers(running_pids, profile_processes, service_gateway_pids))
     profiles = _stop_windows_gateways(running_pids, profile_processes, service_gateway_pids, unmapped_pids, unmapped,
-                                      on_request=lambda pid: pause_record.mark_stop_sent(intended, pid), born=born)
+                                      on_request=lambda pid: pause_record.mark_stop_sent(intended, pid), born=born,
+                                      gateway_mode=gateway_mode)
     token = {"resume_needed": True, "profiles": profiles, "unmapped_pids": unmapped_pids, "unmapped": unmapped}
     # Every profile with ANY live gateway at discovery counts as running: service-supervised ones skip the
     # socket pause (absent from ``profiles``) but the SCM restart brings them back, not a cold-start.
@@ -1018,8 +1019,9 @@ def _cold_start_pause_token(adopted: dict | None, claims: list) -> dict | None:
 
 
 def _stop_windows_gateways(running_pids, profile_processes, service_gateway_pids, unmapped_pids, unmapped,
-                           on_request=None, born=None) -> dict:
-    """Socket-pause the mapped gateways, drain, then tree-kill survivors; the paused ``profiles``.
+                           on_request=None, born=None, *, gateway_mode: bool = False) -> dict:
+    """Socket-pause the mapped gateways, drain, then tree-kill safe survivors; the paused ``profiles``.
+    If a survivor is this updater's gateway ancestor, stop before the kill and let the caller retry detached.
     A force-killed process needs no stop record: dead, it is owed; alive, it was never stopped.
 
     The kill is authorized by each process's birth as discovered (*born*, a mapped gateway's
@@ -1042,8 +1044,13 @@ def _stop_windows_gateways(running_pids, profile_processes, service_gateway_pids
     survivors = _m()._wait_for_windows_update_gateway_exit(mapped_pids, timeout=drain_timeout)
     # Tree-kill survivors, unmapped gateways, and pre-request launchers; one already gone raises
     # ProcessLookupError, one whose birth differs (or was never read) is refused, and both are skipped.
+    force_kill_candidates = sorted(set(survivors).union(unmapped_pids).union(launcher_pids))
+    if _refuse_gateway_ancestor_tree_kill(force_kill_candidates, gateway_mode=gateway_mode):
+        # Keep the durable pause record: this run was launched beneath the gateway it would kill.
+        # Aborting before touching the checkout lets the caller retry via /update or a terminal.
+        raise RuntimeError("Refusing Windows update because stopping the gateway would terminate its updater")
     force_killed = []
-    for pid in sorted(set(survivors).union(unmapped_pids).union(launcher_pids)):
+    for pid in force_kill_candidates:
         with suppress(ProcessLookupError, PermissionError, OSError):
             terminate_pid(int(pid), force=True, expected_start_time=born.get(int(pid)))
             force_killed.append(int(pid))

@@ -1749,11 +1749,14 @@ def _apply_pulled_update(
     _complete_source_update(completion_request)
 
 
-def _pause_gateways_for_update(opts):
+def _pause_gateways_for_update(opts, *, gateway_mode: bool = False):
     """Windows pauses here (venv locks); Linux/macOS only arm a pause the commit point performs."""
     try:
-        return _m()._pause_windows_gateways_for_update() or _posix_pause.arm_pause(
-            no_gateway_restart=opts.no_gateway_restart)
+        pause_windows = _m()._pause_windows_gateways_for_update
+        # Keep the default call shape stable for existing integrations; only the detached
+        # gateway update path needs to opt out of the ancestry tree-kill guard.
+        windows_token = (pause_windows(gateway_mode=True) if gateway_mode else pause_windows())
+        return windows_token or _posix_pause.arm_pause(no_gateway_restart=opts.no_gateway_restart)
     except RuntimeError:  # update_cmd_windows._abort_on_error / ServicePauseFailed: nothing moved
         _record_stop("gateway_pause_failed")
         raise
@@ -1817,7 +1820,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
     from hermes_cli.update_stage import publish_stage
     publish_stage("Downloading updates")  # a failed backup never stops the update
 
-    _windows_gateway_resume = _pause_gateways_for_update(opts)
+    _windows_gateway_resume = _pause_gateways_for_update(opts, gateway_mode=gateway_mode)
     if _windows_gateway_resume:
         import atexit as _atexit
         _atexit.register(_m()._resume_windows_gateways_after_update, _windows_gateway_resume)
