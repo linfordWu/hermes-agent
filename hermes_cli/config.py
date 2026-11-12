@@ -36,6 +36,7 @@ from hermes_cli import managed_scope
 from hermes_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul
 from hermes_cli.left_core_migration import profile_env_names as _left_core_profile_env
 from hermes_cli.secret_prompt import masked_secret_prompt
+from hermes_cli.config_warnings import print_config_warnings, warn_deprecated_cwd_env_vars
 # Managed-mode, container and HERMES_UID/GID policy live in hermes_constants (import-safe);
 # re-exported here so existing callers/patch targets keep working.
 from hermes_constants import (
@@ -1092,49 +1093,6 @@ def validate_config_structure(config: Optional[dict[str, Any]] = None) -> list[C
     _validate_web_backends(config, issues)
     _validate_quoted_containers(config, issues)
     return issues
-
-
-def print_config_warnings(config: Optional[dict[str, Any]] = None) -> None:
-    """Print config structure warnings to stderr at startup; nothing if config is healthy."""
-    try:
-        issues = validate_config_structure(config)
-    except Exception:
-        issues = []
-    if not issues:
-        return
-
-    lines = ["\033[33m⚠ Config issues detected in config.yaml:\033[0m"]
-    for ci in issues:
-        marker = "\033[31m✗\033[0m" if ci.severity == "error" else "\033[33m⚠\033[0m"
-        lines.append(f"  {marker} {ci.message}")
-    lines.append("  \033[2mRun 'hermes doctor' for fix suggestions.\033[0m")
-    sys.stderr.write("\n".join(lines) + "\n\n")
-
-
-def warn_deprecated_cwd_env_vars() -> None:
-    """Warn if MESSAGING_CWD / TERMINAL_CWD is set in .env (canonical: terminal.cwd in config.yaml).
-    Reads the file rather than ``os.environ`` because runtime bridges and session restoration
-    legitimately set ``TERMINAL_CWD``."""
-    try:
-        env_map = load_env()
-    except Exception:
-        return
-
-    lines: list[str] = []
-    for name in ("MESSAGING_CWD", "TERMINAL_CWD"):
-        val = str(env_map.get(name) or "").strip()
-        if val:
-            lines.append(f"  \033[33m⚠\033[0m {name}={val} found in .env — this is deprecated.")
-    if lines:
-        from hermes_constants import display_hermes_home
-
-        hint_path = display_hermes_home()
-        lines.insert(0, "\033[33m⚠ Deprecated .env settings detected:\033[0m")
-        lines.append(
-            "  \033[2mMove to config.yaml instead:  "
-            "terminal:\\n    cwd: /your/project/path\033[0m")
-        lines.append(f"  \033[2mThen remove the old entries from {hint_path}/.env\033[0m")
-        sys.stderr.write("\n".join(lines) + "\n\n")
 
 
 def _persist_migration(config: dict[str, Any]) -> None:
