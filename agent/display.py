@@ -11,6 +11,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from difflib import unified_diff
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urlsplit
@@ -205,6 +206,7 @@ class ToolPreview:
 
 _SHELL_SILENT_HEADS = {"cd", "pushd", "popd", "export", "set", "unset", "source", ".", "true", "false", ":"}
 _SHELL_PIPE_TAIL_HEADS = {"head", "tail", "wc", "sort", "uniq"}
+_SHELL_PARSE_CACHE_SIZE = 4096
 
 
 def _shell_basename(head: str) -> str:
@@ -226,14 +228,20 @@ def _scan_quoted(text: str) -> Iterator[tuple[int, str, bool]]:
             yield i, ch, False
 
 
-def _split_shell_words(segment: str) -> list[str]:
+@lru_cache(maxsize=_SHELL_PARSE_CACHE_SIZE)
+def _split_shell_words_cached(segment: str) -> tuple[str, ...]:
     parts: list[list[str]] = [[]]
     for _, ch, quoted in _scan_quoted(segment):
         if not quoted and ch.isspace():
             parts.append([])
         else:
             parts[-1].append(ch)
-    return ["".join(p) for p in parts if p]
+    return tuple("".join(p) for p in parts if p)
+
+
+def _split_shell_words(segment: str) -> list[str]:
+    # Keep the public helper's mutable-list behavior without exposing cached state.
+    return list(_split_shell_words_cached(segment))
 
 
 def _strip_shell_pipe_tail(segment: str) -> str:
@@ -246,7 +254,8 @@ def _strip_shell_pipe_tail(segment: str) -> str:
     return " ".join(words).strip()
 
 
-def _split_shell_compound(command: str) -> list[str]:
+@lru_cache(maxsize=_SHELL_PARSE_CACHE_SIZE)
+def _split_shell_compound_cached(command: str) -> tuple[str, ...]:
     """Split on unquoted ``&&`` / ``||`` / ``;`` / newline, dropping pipe tails per segment."""
     raw: list[list[str]] = [[]]
     skip = False
@@ -261,7 +270,12 @@ def _split_shell_compound(command: str) -> list[str]:
         else:
             raw[-1].append(ch)
     segments = (_strip_shell_pipe_tail("".join(buf).strip()) for buf in raw)
-    return [s for s in segments if s]
+    return tuple(s for s in segments if s)
+
+
+def _split_shell_compound(command: str) -> list[str]:
+    # Callers historically receive a fresh list; cache only its immutable contents.
+    return list(_split_shell_compound_cached(command))
 
 
 def _shell_head_word(segment: str) -> str:
@@ -1343,4 +1357,3 @@ def get_cute_tool_message(tool_name: str, args: dict, duration: float, result: s
         safe_name = tool_name[:9] if isinstance(tool_name, str) and tool_name else t("display.cute.fallback_tool_name")
         safe_duration = f"{duration:.1f}s" if isinstance(duration, (int, float)) else t("display.cute.fallback_done")
         return t("display.cute.completed", tool=f"{safe_name:9}", duration=safe_duration)
-

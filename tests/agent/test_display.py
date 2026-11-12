@@ -18,6 +18,15 @@ from agent.display import (
 
 
 @pytest.fixture(autouse=True)
+def clear_shell_parse_caches():
+    display_module._split_shell_words_cached.cache_clear()
+    display_module._split_shell_compound_cached.cache_clear()
+    yield
+    display_module._split_shell_words_cached.cache_clear()
+    display_module._split_shell_compound_cached.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def reset_tool_preview_max_len():
     set_tool_preview_max_len(0)
     yield
@@ -32,6 +41,39 @@ def test_cute_tool_message_falls_back_when_renderer_raises(monkeypatch):
 
     result = get_cute_tool_message("web_extract", {"urls": []}, 0.25)
     assert isinstance(result, str) and result
+
+
+def test_shell_summary_reuses_bounded_parse_caches(monkeypatch):
+    command = 'A=1 printf "hello world" | head -c 20 && echo "$?" >&2; sed -n "1,40p" file.txt | sort | uniq -c'
+    scanned = 0
+    original_scan = display_module._scan_quoted
+
+    def counting_scan(text):
+        nonlocal scanned
+        for item in original_scan(text):
+            scanned += 1
+            yield item
+
+    monkeypatch.setattr(display_module, "_scan_quoted", counting_scan)
+    first = display_module.summarize_shell_command(command)
+    first_scan_count = scanned
+
+    assert first == 'A=1 printf "hello world" + 2 commands'
+    assert first_scan_count > 0
+    assert display_module.summarize_shell_command(command) == first
+    assert scanned == first_scan_count
+    assert display_module._split_shell_compound_cached.cache_info().maxsize == 4096
+    assert display_module._split_shell_words_cached.cache_info().maxsize == 4096
+
+
+def test_shell_parse_caches_do_not_expose_mutable_cached_lists():
+    words = display_module._split_shell_words("printf 'hello world'")
+    words.clear()
+    assert display_module._split_shell_words("printf 'hello world'") == ["printf", "'hello world'"]
+
+    segments = display_module._split_shell_compound("printf one && echo two")
+    segments.clear()
+    assert display_module._split_shell_compound("printf one && echo two") == ["printf one", "echo two"]
 
 
 class TestBuildToolPreview:
