@@ -51,9 +51,12 @@ def _client_config(cfg):
         'display', 'approvals', 'paste_collapse_threshold', 'paste_collapse_char_threshold') if key in cfg})
     if 'display' in result:
         # Its readers are local surfaces (Ink, Desktop): the local key a local /reasoning show|hide or
-        # /footer saved wins over the global one (T7).
+        # /footer saved wins over the global one (T7). Keep the unset reasoning default aligned with
+        # launch_shows_reasoning(): the TUI treats an absent config value as false during hydration.
         from gateway.display_config import local_display_config
-        result['display'] = local_display_config(result['display'])
+        display = local_display_config(result['display'])
+        display.setdefault('show_reasoning', True)
+        result['display'] = display
     # Allowlisted after redaction: ``record_key`` is a keybinding, not a credential, but the
     # structural masker treats every ``*_key`` leaf as one. The voice section's real secrets
     # (``api_key``) never enter the projection.

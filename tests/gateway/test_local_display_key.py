@@ -197,3 +197,13 @@ def test_settings_reasoning_toggle_wins_after_a_local_reasoning_hide(tmp_path, m
 
     assert _client_config(saved)['display']['show_reasoning'] is True, saved['display']
     assert launch_shows_reasoning(_Policy(), None) is True
+
+
+def test_client_config_supplies_the_unset_reasoning_default_for_local_ui():
+    from gateway.session_config import _client_config
+
+    assert 'display' not in _client_config({})
+    assert _client_config({'display': {}})['display']['show_reasoning'] is True
+    assert _client_config({'display': {'show_reasoning': False}})['display']['show_reasoning'] is False
+    assert _client_config({'display': {'platforms': {'cli': {'show_reasoning': False}}}})[
+        'display']['show_reasoning'] is False
