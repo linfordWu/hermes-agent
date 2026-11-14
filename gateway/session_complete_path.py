@@ -24,9 +24,13 @@ async def complete_path(connection, ref, params):
         raise AuthorityRefusal('not_found')
     authorize(connection, ref, params, 'session:read')
     from gateway.session_policy import policy_for_source, terminal_uses_host_cwd
-    policy = policy_for_source(authority.runner, authority.sessions[ref.session_id].source)
-    if policy is None or not terminal_uses_host_cwd(json.loads(policy.terminal_json)):
+    source = authority.sessions[ref.session_id].source
+    policy = policy_for_source(authority.runner, source)
+    if policy is not None and not terminal_uses_host_cwd(json.loads(policy.terminal_json)):
         # A remote or sandboxed backend's tree is not this host's; completion is advisory, so nothing.
+        return {'items': []}
+    from gateway.config import Platform
+    if policy is None and (source is None or source.platform != Platform.API_SERVER):
         return {'items': []}
     # The listing helpers are bound onto the sidecar module's globals (method_ctx.bind_module).
     from tui_gateway import server
@@ -34,6 +38,21 @@ async def complete_path(connection, ref, params):
     def listing():
         from gateway.run import _profile_runtime_scope
         with _profile_runtime_scope(Path(authority.profile_id)):
-            return server._path_completion_items(word, policy.cwd, None, True)
+            if policy is not None:
+                cwd = policy.cwd
+            else:
+                # API-server sessions don't have a frozen LOCAL session policy. Read the
+                # profile's terminal settings under its scope, and only expose host paths when
+                # that profile actually runs against the host filesystem.
+                from tools.terminal_scope import terminal_env
+                terminal = {
+                    'TERMINAL_ENV': terminal_env('TERMINAL_ENV', 'local'),
+                    'TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE': terminal_env(
+                        'TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE', 'false'),
+                }
+                if not terminal_uses_host_cwd(terminal):
+                    return []
+                cwd = terminal_env('TERMINAL_CWD', str(Path.home()))
+            return server._path_completion_items(word, cwd, None, True)
 
     return {'items': await asyncio.to_thread(listing)}

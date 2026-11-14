@@ -5,6 +5,7 @@ or ``@`` completion answered ``-32601``. The shared gateway's own cwd is its dae
 listing must be rooted at the session's policy cwd.
 """
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -39,12 +40,12 @@ def rpc(tmp_path, monkeypatch):
         async def call(params):
             return await connection.dispatch({'id': 1, 'method': 'complete.path', 'params': params})
 
-        yield call, backend
+        yield call, backend, authority, project
 
 
 @pytest.mark.asyncio
 async def test_complete_path_lists_the_session_folder(rpc):
-    call, _ = rpc
+    call, _, _, _ = rpc
     reply = await call({'word': '@file:', 'session_id': 's', 'cwd': '/client/claim'})
     assert 'error' not in reply, reply
     texts = [item['text'] for item in reply['result']['items']]
@@ -54,7 +55,7 @@ async def test_complete_path_lists_the_session_folder(rpc):
 
 @pytest.mark.asyncio
 async def test_complete_path_lists_nothing_for_a_remote_backend_or_without_a_session(rpc):
-    call, backend = rpc
+    call, backend, _, _ = rpc
     assert (await call({'word': '@file:'}))['result'] == {'items': []}
     backend['TERMINAL_ENV'] = 'ssh'
     assert (await call({'word': '@file:', 'session_id': 's'}))['result'] == {'items': []}
@@ -62,6 +63,37 @@ async def test_complete_path_lists_nothing_for_a_remote_backend_or_without_a_ses
 
 @pytest.mark.asyncio
 async def test_complete_path_refuses_a_session_it_does_not_serve(rpc):
-    call, _ = rpc
+    call, _, _, _ = rpc
     reply = await call({'word': '@file:', 'session_id': 'other'})
     assert reply['error']['data']['reason'] == 'not_found'
+
+
+@pytest.mark.asyncio
+async def test_api_server_session_uses_profile_local_terminal_cwd(rpc, monkeypatch):
+    from gateway.config import Platform
+
+    call, _, authority, project = rpc
+    authority.sessions['s'].source = SimpleNamespace(platform=Platform.API_SERVER)
+    monkeypatch.setattr(session_policy, 'policy_for_source', lambda runner, source: None)
+    (Path(authority.profile_id) / 'config.yaml').write_text(
+        json.dumps({'terminal': {'backend': 'local', 'cwd': str(project)}}), encoding='utf-8')
+    reply = await call({'word': '@file:', 'session_id': 's'})
+
+    assert 'error' not in reply, reply
+    texts = [item['text'] for item in reply['result']['items']]
+    assert '@file:project-notes.md' in texts
+    assert '@file:daemon-notes.md' not in texts
+
+
+@pytest.mark.asyncio
+async def test_api_server_session_does_not_list_host_paths_for_remote_terminal(rpc, monkeypatch):
+    from gateway.config import Platform
+
+    call, _, authority, project = rpc
+    authority.sessions['s'].source = SimpleNamespace(platform=Platform.API_SERVER)
+    monkeypatch.setattr(session_policy, 'policy_for_source', lambda runner, source: None)
+    (Path(authority.profile_id) / 'config.yaml').write_text(
+        json.dumps({'terminal': {'backend': 'ssh', 'cwd': str(project)}}), encoding='utf-8')
+    reply = await call({'word': '@file:', 'session_id': 's'})
+
+    assert reply['result'] == {'items': []}
